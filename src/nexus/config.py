@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # mean a fresh clone running `make test` could reach real providers and
     # bill someone real money.
     upstream: str = "fake"
+    # Rerank is a provider extension, not part of the OpenAI surface, so it
+    # gets its own base and key rather than riding on the model registry.
+    rerank_base_url: str = "https://api.siliconflow.com/v1"
+    rerank_api_key_env: str = "SILICONFLOW_API_KEY"
     # Money is stored as integer nano-USD everywhere; see nexus.money for
     # why cents cannot be used. Exposed as a setting only so the value is
     # discoverable, not so it can be changed.
