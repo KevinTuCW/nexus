@@ -92,6 +92,7 @@ def test_unregistered_model_is_refused(monkeypatch):
         up.complete("call-5", "some/never-registered", [])
 
 
+@pytest.mark.live
 @pytest.mark.skipif(
     not os.environ.get("GLM_API_KEY"), reason="no GLM_API_KEY; live smoke skipped"
 )

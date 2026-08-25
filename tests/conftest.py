@@ -36,7 +36,17 @@ def _settings_env_names() -> set[str]:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_settings(monkeypatch):
+def _isolated_settings(monkeypatch, request):
+    if request.node.get_closest_marker("live"):
+        # Live tests exist precisely to use real credentials. Isolating them
+        # would strip the key this fixture was extended to hide, and they
+        # would fail for a reason unrelated to what they test -- which is
+        # exactly what happened the first time `make test-live` ran.
+        #
+        # Safe because reaching them is opt-in twice over: the marker plus a
+        # separate make target. A test without the marker still cannot see a
+        # provider key, which is the property that matters.
+        return
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     managed = _settings_env_names()
     for key in list(os.environ):

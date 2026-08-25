@@ -93,6 +93,7 @@ def test_metered_stream_over_a_litellm_upstream_reconciles(monkeypatch):
     assert reconcile([entry], up.charges()) == []
 
 
+@pytest.mark.live
 @pytest.mark.skipif(
     not os.environ.get("GLM_API_KEY"), reason="no GLM_API_KEY; live smoke skipped"
 )
