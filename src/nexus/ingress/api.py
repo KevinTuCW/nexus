@@ -1,12 +1,15 @@
 """The OpenAI-compatible surface.
 
-Phase 1 implements `/v1/chat/completions` against a fake upstream, wired
-through auth, family lookup and the ledger. Routing, diversity enforcement
-and fallback now run on this path too.
+`/v1/chat/completions`, wired through auth, routing, the diversity guard,
+the fallback chain, the ledger and a trace span — in that order, and the
+order is load-bearing: the guard runs before any provider is called, and the
+trace is opened only after the ledger row exists, so a trace can never
+describe a call the books do not.
 
-Note what is deliberately absent: streaming. It needs the real upstream to
-be meaningful, and the hard part of streaming — settling an aborted stream —
-is already covered deterministically by `nexus.ledger.session`.
+Streaming is implemented in `nexus.upstream_litellm` and metered by
+`nexus.ingress.streaming`, but it is not exposed on this endpoint yet: no
+tenant asks for `stream: true` through nexus today, and an untested response
+path is worse than an absent one.
 """
 
 import uuid
@@ -17,6 +20,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from nexus.ingress.auth import AuthError, authenticate
 from nexus.ledger.book import Entry
 from nexus.ledger.session import meter
+from nexus.obs import span
 from nexus.policy.diversity import DiversityViolation, guard
 from nexus.policy.fallback import fallback_chain
 from nexus.policy.routing import choose
@@ -102,6 +106,23 @@ async def chat_completions(request: Request, authorization: str = Header(default
             fallback_from=fallback_from,
         )
     )
+
+    # Traced after the ledger row exists, so a trace can never describe a
+    # call the books do not. Metadata only -- `messages` is never passed,
+    # and SAFE_ATTRS would drop it if someone added it here later.
+    with span(
+        "chat.completion",
+        tenant=tenant,
+        workload=body.get("nexus_workload", "default"),
+        requested_model=model,
+        served_model=served_model,
+        family=family_of(served_model),
+        substituted=decision.substituted,
+        fallback_from=fallback_from,
+        status=settlement.status,
+        cost_nanousd=settlement.cost_nanousd,
+    ):
+        pass
 
     payload = {
         "id": call_id,
