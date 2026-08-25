@@ -1,0 +1,14 @@
+[
+  {"question": "出差住宿费怎么报销", "expect_doc": "expense-reimbursement"},
+  {"question": "报销单需要谁审批", "expect_doc": "expense-reimbursement"},
+  {"question": "年假能不能跨年", "expect_doc": "annual-leave"},
+  {"question": "在职满十年的员工每年有多少天年假", "expect_doc": "annual-leave"},
+  {"question": "VPN 连不上怎么办", "expect_doc": "vpn-access"},
+  {"question": "VPN 证书多久过期", "expect_doc": "vpn-access"},
+  {"question": "笔记本坏了怎么报修", "expect_doc": "laptop-replacement"},
+  {"question": "电脑维修成本超过残值一半会怎么处理", "expect_doc": "laptop-replacement"},
+  {"question": "新人入职要办什么", "expect_doc": "onboarding-checklist"},
+  {"question": "发现数据泄露怎么上报", "expect_doc": "security-incident"},
+  {"question": "公司股价明天会涨吗", "expect_doc": null},
+  {"question": "竞争对手给多少薪资", "expect_doc": null}
+]

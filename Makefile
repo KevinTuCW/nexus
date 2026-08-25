@@ -1,4 +1,4 @@
-PY = PYTHONPATH=src .venv/bin/python
+PY = PYTHONPATH=src:. .venv/bin/python
 
 install:
 	.venv/bin/pip install -e '.[dev]'
@@ -13,6 +13,9 @@ test:
 # real providers should be something you typed, not something you inherited.
 test-live:
 	set -a; . ./.env; set +a; $(PY) -m pytest -q
+
+wuwork-eval:
+	$(PY) -m tenants.wuwork.eval
 
 run:
 	$(PY) -m uvicorn nexus.app:app --reload
