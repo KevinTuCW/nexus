@@ -1,0 +1,12 @@
+tenant: helpmate
+integration: zero_touch
+repo_path: ~/ai_projects/helpmate
+gate_command: make gate       # not `make eval` -- helpmate names it `gate`
+api_key_env: NEXUS_KEY_HELPMATE
+allow_fallback: true
+budget_nanousd_per_day: 3000000000
+models:
+  zai/glm-4.7:
+    substitutable_to: []
+  siliconflow/Qwen/Qwen3-8B:
+    substitutable_to: [qwen3]   # the router model: any Qwen3 size will do

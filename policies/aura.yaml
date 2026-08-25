@@ -1,0 +1,13 @@
+tenant: aura
+integration: zero_touch
+repo_path: ~/ai_projects/aura
+gate_command: make test       # aura has no eval/gate target -- measured
+api_key_env: NEXUS_KEY_AURA
+allow_fallback: true
+budget_nanousd_per_day: 1000000000
+# Cloud side only. aura's edge router decides per utterance at p95 < 5ms;
+# nothing that crosses this gateway can meet that, so the edge is out of
+# scope by design, and its token usage is a stated blank in the ledger.
+models:
+  zai/glm-4.6:
+    substitutable_to: [glm]

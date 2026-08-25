@@ -1,0 +1,12 @@
+tenant: wealthwise
+integration: zero_touch
+repo_path: ~/ai_projects/wealthwise
+gate_command: make eval
+api_key_env: NEXUS_KEY_WEALTHWISE
+# Compliance path: a silent downgrade to a weaker model is worse than a
+# loud 503. Gate G4 enforces this.
+allow_fallback: false
+budget_nanousd_per_day: 2000000000
+models:
+  zai/glm-4.6: {}
+  siliconflow/Qwen/Qwen3-235B-A22B: {}

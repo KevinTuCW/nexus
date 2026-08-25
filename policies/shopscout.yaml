@@ -1,0 +1,15 @@
+tenant: shopscout
+integration: zero_touch
+repo_path: ~/ai_projects/shopscout
+gate_command: make eval
+api_key_env: NEXUS_KEY_SHOPSCOUT
+allow_fallback: true
+budget_nanousd_per_day: 2000000000   # $2.00/day
+# Jury members. Every one is pinned: substitution here would collapse the
+# cross-lab diversity the jury exists for. Before nexus, this diversity was
+# physically enforced by two different base_urls in shopscout's own config;
+# routing through one gateway is what turned it into a promise.
+models:
+  zai/glm-4.6: {}
+  siliconflow/Qwen/Qwen3-235B-A22B: {}
+  siliconflow/deepseek-ai/DeepSeek-V3: {}

@@ -11,6 +11,7 @@ sibling `aura` project.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -32,3 +33,13 @@ def _isolated_settings(monkeypatch):
     for key in list(os.environ):
         if key in managed or key.startswith(_ISOLATED_PREFIXES):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture
+def policies_dir() -> Path:
+    """The real policies/ directory, resolved from this file's location.
+
+    Not `Path("policies")`: that depends on the pytest working directory and
+    would pass locally while failing in CI.
+    """
+    return Path(__file__).resolve().parent.parent / "policies"
