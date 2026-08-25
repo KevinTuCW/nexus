@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -114,3 +115,28 @@ def test_entry_records_which_model_was_displaced():
         fallback_from="zai/glm-4.6",
     )
     assert e.fallback_from == "zai/glm-4.6"
+
+
+def test_aborted_rows_are_reconciled_as_a_lower_bound_not_an_equality():
+    # Against a real provider, an aborted stream carries no usage frame:
+    # nexus can only count the chunks it saw, and a chunk is not a token.
+    # Asserting equality there would make G2 fail on correct behaviour;
+    # asserting nothing would let real under-counting hide. The honest
+    # middle is a lower bound.
+    entry = replace(_entry("s1", None, 5000), status="aborted")
+    upstream = [UpstreamCharge(call_id="c-s1", model="zai/glm-4.6", cost_nanousd=6000)]
+    assert reconcile([entry], upstream) == []
+
+
+def test_an_aborted_row_billing_more_than_the_upstream_is_still_a_problem():
+    # A lower bound is still a bound. Over-billing an aborted call is not
+    # excused by the approximation.
+    entry = replace(_entry("s1", None, 7000), status="aborted")
+    upstream = [UpstreamCharge(call_id="c-s1", model="zai/glm-4.6", cost_nanousd=6000)]
+    assert [p.kind for p in reconcile([entry], upstream)] == ["amount_mismatch"]
+
+
+def test_ok_rows_still_require_exact_equality():
+    entry = _entry("s1", None, 5999)
+    upstream = [UpstreamCharge(call_id="c-s1", model="zai/glm-4.6", cost_nanousd=6000)]
+    assert [p.kind for p in reconcile([entry], upstream)] == ["amount_mismatch"]

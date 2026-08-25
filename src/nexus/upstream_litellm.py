@@ -106,7 +106,44 @@ class LiteLLMUpstream:
         return Completion(content=content, usage=from_openai_payload(raw_usage))
 
     def stream(self, call_id: str, model: str, messages: list[dict]) -> Iterator[str]:
-        raise NotImplementedError("streaming lands in Task 2b.2")
+        """Yield content deltas, booking whatever the provider actually gave.
+
+        Two accounting paths, because the provider only offers one of them
+        reliably. A stream that runs to completion carries a final usage
+        frame; that is authoritative and is what gets booked. A stream the
+        client abandons carries no such frame, so the fallback is the number
+        of deltas seen — explicitly a lower bound, since a delta is not a
+        token. `reconcile()` knows the difference and asserts a bound rather
+        than an equality for those rows.
+        """
+        kwargs = self._call_kwargs(model, messages)
+        kwargs["stream_options"] = {"include_usage": True}
+        try:
+            stream = self._stream_fn(**kwargs)
+        except Exception as exc:  # noqa: BLE001 - see complete()
+            raise UpstreamUnavailable(f"{model}: {exc}") from exc
+
+        prompt_tokens = sum(len(m.get("content", "")) for m in messages) or 1
+        seen_deltas = 0
+        final_usage: dict | None = None
+        try:
+            for chunk in stream:
+                payload = chunk.model_dump()
+                if payload.get("usage"):
+                    final_usage = payload["usage"]
+                    continue
+                delta = (payload.get("choices") or [{}])[0].get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    seen_deltas += 1
+                    yield content
+        finally:
+            self._book(
+                call_id,
+                model,
+                final_usage
+                or {"prompt_tokens": prompt_tokens, "completion_tokens": seen_deltas},
+            )
 
     def charges(self) -> list[UpstreamCharge]:
         return list(self._charges)

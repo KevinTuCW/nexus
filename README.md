@@ -44,4 +44,6 @@ make run
 
 - aura's on-device token usage never reaches the ledger: the edge never crosses this gateway, and back-filling it would require editing the tenant repo, which the zero-touch contract forbids.
 - For zero-touch tenants, attribution is tenant/workload level — call-chain-level attribution holds only for the native tenant.
+- Reconciliation against a real provider is not independent. The provider's response is the only figure available, so `charges()` prices the **raw** payload while the ledger prices the normalised one — enough to catch a normalisation bug, not enough to catch a provider that under-reports. A genuinely independent source would be the provider's billing API, which is not integrated.
+- For streams the client abandons, no usage frame arrives, so the ledger books the number of content deltas seen. A delta is not a token: rows with `status = 'aborted'` are a **lower bound**, and reconciliation asserts a bound rather than an equality for them. Over-billing an aborted call is still reported.
 - Passthrough endpoints (`/rerank`) are forwarded but not billed. Rerank is not priced per token; putting it through the token ledger would mean inventing a figure, and reconciliation would then confirm the invention. The gap is recorded here instead.

@@ -123,13 +123,26 @@ def reconcile(entries: list[Entry], upstream: list[UpstreamCharge]) -> list[Disc
                 )
             )
             continue
-        if entry.cost_nanousd != charge.cost_nanousd:
+        # `aborted` rows are a lower bound, not a measurement. A real
+        # provider sends no usage frame when the client hangs up mid-stream,
+        # so nexus can only count the chunks it saw -- and a chunk is not a
+        # token. Demanding equality there would fail the gate on correct
+        # behaviour; demanding nothing would let genuine under-counting
+        # hide. Over-billing an aborted call is still a problem: a bound is
+        # a bound, and "we approximated" is not a licence to approximate
+        # upwards.
+        exact = entry.status != "aborted"
+        if (exact and entry.cost_nanousd != charge.cost_nanousd) or (
+            not exact and entry.cost_nanousd > charge.cost_nanousd
+        ):
             problems.append(
                 Discrepancy(
                     kind="amount_mismatch",
                     detail=(
-                        f"call {charge.call_id}: ledger {entry.cost_nanousd} != "
-                        f"upstream {charge.cost_nanousd} nano-USD"
+                        f"call {charge.call_id}: ledger {entry.cost_nanousd} "
+                        f"{'!=' if exact else '>'} upstream "
+                        f"{charge.cost_nanousd} nano-USD"
+                        + ("" if exact else " (aborted rows are a lower bound)")
                     ),
                 )
             )
