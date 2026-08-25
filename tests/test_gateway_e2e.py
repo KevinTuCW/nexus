@@ -1,7 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from nexus.app import app, get_state
+from nexus.app import app
+from nexus.state import get_state
 
 
 @pytest.fixture

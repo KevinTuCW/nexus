@@ -19,6 +19,7 @@ from nexus.ingress.auth import AuthError, authenticate
 from nexus.ledger.book import Entry
 from nexus.ledger.session import meter
 from nexus.registry.families import family_of
+from nexus.state import get_state
 from nexus.upstream import PRICES, UnpricedModel
 
 router = APIRouter()
@@ -26,8 +27,6 @@ router = APIRouter()
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str = Header(default="")):
-    from nexus.app import get_state
-
     state = get_state()
     try:
         tenant = authenticate(authorization, state.key_index)

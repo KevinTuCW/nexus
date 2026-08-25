@@ -11,6 +11,7 @@ only against itself.
 """
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from nexus.ledger.book import UpstreamCharge
 from nexus.ledger.usage import Usage, cost_nanousd
@@ -60,6 +61,24 @@ class UnpricedModel(Exception):
 class Completion:
     content: str
     usage: Usage
+
+
+class Upstream(Protocol):
+    """What the gateway needs from a provider.
+
+    Declared so `state.py` can hold an upstream without importing a concrete
+    one, and so the LiteLLM adapter arriving in P2b has a shape to satisfy
+    rather than a class to subclass.
+
+    `charges()` is part of the interface, not an artefact of the fake: gate
+    G2 reconciles the ledger against what the provider says it charged, and
+    an upstream that cannot report that turns reconciliation into the ledger
+    checking itself.
+    """
+
+    def complete(self, call_id: str, model: str, messages: list[dict]) -> Completion: ...
+
+    def charges(self) -> list[UpstreamCharge]: ...
 
 
 class FakeUpstream:
