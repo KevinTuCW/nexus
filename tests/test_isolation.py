@@ -48,4 +48,20 @@ def test_missing_repo_is_unverifiable_not_clean(tmp_path):
 def test_non_git_directory_is_unverifiable_not_clean(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
+    # Precondition, stated rather than assumed. This test only means
+    # anything if tmp_path is genuinely outside every git worktree; on a
+    # runner whose temp dir sits inside a checkout, `git status` would
+    # succeed and report on *that* repo, and the assertion below would go
+    # green for a reason unrelated to what it claims to test. Asserting the
+    # precondition makes such an environment fail loudly instead.
+    enclosing = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=plain,
+        capture_output=True,
+        text=True,
+    )
+    assert enclosing.returncode != 0, (
+        f"tmp_path {plain} sits inside a git worktree; this test cannot "
+        "distinguish UNVERIFIABLE from a real repo status here"
+    )
     assert working_tree_status(plain) == RepoStatus.UNVERIFIABLE
