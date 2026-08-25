@@ -18,7 +18,7 @@ Amounts are integer nano-USD throughout; see `nexus.money`.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Protocol
 
 from nexus.ledger.usage import Usage
 
@@ -64,6 +64,21 @@ class UpstreamCharge:
 class Discrepancy:
     kind: Literal["amount_mismatch", "missing_entry", "orphan_entry", "double_count"]
     detail: str
+
+
+class Ledger(Protocol):
+    """What the gateway needs from a ledger, memory-backed or persisted.
+
+    Declared so `state.py` can hold either without importing psycopg, and so
+    the Postgres implementation has a shape to satisfy rather than a class
+    to subclass. Both implementations return the same `Entry` type: the row
+    shape is defined once, so a field added to it cannot be quietly
+    supported by one store and dropped by the other.
+    """
+
+    def record(self, entry: "Entry") -> None: ...
+
+    def entries(self) -> list["Entry"]: ...
 
 
 class InMemoryLedger:

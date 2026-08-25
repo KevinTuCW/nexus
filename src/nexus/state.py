@@ -16,7 +16,7 @@ from functools import lru_cache
 
 from nexus.config import get_settings
 from nexus.ingress.auth import build_key_index
-from nexus.ledger.book import InMemoryLedger
+from nexus.ledger.book import InMemoryLedger, Ledger
 from nexus.registry.tenants import TenantPolicy, load_policies
 from nexus.upstream import FakeUpstream, Upstream
 
@@ -25,7 +25,7 @@ from nexus.upstream import FakeUpstream, Upstream
 class State:
     policies: dict[str, TenantPolicy]
     key_index: dict[str, str]
-    ledger: InMemoryLedger
+    ledger: Ledger
     upstream: Upstream
 
 
@@ -59,9 +59,19 @@ def get_state() -> State:
             f"unknown UPSTREAM '{settings.upstream}'; expected 'fake' or 'litellm'"
         )
 
+    ledger: Ledger
+    if settings.database_url:
+        # Imported here so psycopg is not a hard import dependency on a
+        # machine without Postgres.
+        from nexus.ledger.pg import PgLedger
+
+        ledger = PgLedger(settings.database_url)
+    else:
+        ledger = InMemoryLedger()
+
     return State(
         policies=policies,
         key_index=build_key_index(policies),
-        ledger=InMemoryLedger(),
+        ledger=ledger,
         upstream=upstream,
     )

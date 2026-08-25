@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # gets its own base and key rather than riding on the model registry.
     rerank_base_url: str = "https://api.siliconflow.com/v1"
     rerank_api_key_env: str = "SILICONFLOW_API_KEY"
+    # Empty means the in-memory ledger. Persisting is opt-in for the same
+    # reason reaching real providers is: a fresh clone should not need a
+    # database to run its tests.
+    database_url: str = ""
     # Money is stored as integer nano-USD everywhere; see nexus.money for
     # why cents cannot be used. Exposed as a setting only so the value is
     # discoverable, not so it can be changed.
