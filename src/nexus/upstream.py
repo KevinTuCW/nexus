@@ -11,7 +11,7 @@ only against itself.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Iterator, Protocol
 
 from nexus.ledger.book import UpstreamCharge
 from nexus.ledger.usage import Usage, cost_nanousd
@@ -82,6 +82,10 @@ class Upstream(Protocol):
 
     def complete(self, call_id: str, model: str, messages: list[dict]) -> Completion: ...
 
+    def stream(
+        self, call_id: str, model: str, messages: list[dict]
+    ) -> Iterator[str]: ...
+
     def charges(self) -> list[UpstreamCharge]: ...
 
 
@@ -113,6 +117,40 @@ class FakeUpstream:
             )
         )
         return Completion(content=f"[fake:{model}] ack", usage=usage)
+
+    def stream(
+        self, call_id: str, model: str, messages: list[dict]
+    ) -> Iterator[str]:
+        """Yield content chunks, one 'token' each.
+
+        Charges are booked in a `finally` for exactly what was emitted, not
+        up front for the whole answer. An abandoned stream must leave the
+        provider having charged for the part it produced — that is the
+        situation the ledger has to match, and a fake that charged for the
+        whole answer would let a broken ledger reconcile.
+        """
+        price = PRICES.get(model)
+        if price is None:
+            raise UnpricedModel(model)
+        if model in self._fail_models:
+            raise UpstreamUnavailable(model)
+        prompt_tokens = sum(len(m.get("content", "")) for m in messages) or 1
+        emitted = 0
+        try:
+            for word in ("fake", "streamed", "answer", "from", model):
+                emitted += 1
+                yield word
+        finally:
+            self._charges.append(
+                UpstreamCharge(
+                    call_id=call_id,
+                    model=model,
+                    cost_nanousd=cost_nanousd(
+                        Usage(prompt_tokens=prompt_tokens, completion_tokens=emitted),
+                        price,
+                    ),
+                )
+            )
 
     def charges(self) -> list[UpstreamCharge]:
         return list(self._charges)
