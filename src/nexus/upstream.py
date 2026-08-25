@@ -57,6 +57,10 @@ class UnpricedModel(Exception):
     """
 
 
+class UpstreamUnavailable(Exception):
+    """The provider could not serve this call. Fallback territory."""
+
+
 @dataclass(frozen=True)
 class Completion:
     content: str
@@ -82,15 +86,23 @@ class Upstream(Protocol):
 
 
 class FakeUpstream:
-    """Deterministic stand-in provider that also books what it charged."""
+    """Deterministic stand-in provider that also books what it charged.
 
-    def __init__(self) -> None:
+    `fail_models` exists so the fallback path is testable without a network
+    partition. A fallback path that has only ever run in production is a
+    path nobody has read.
+    """
+
+    def __init__(self, fail_models: frozenset[str] = frozenset()) -> None:
         self._charges: list[UpstreamCharge] = []
+        self._fail_models = fail_models
 
     def complete(self, call_id: str, model: str, messages: list[dict]) -> Completion:
         price = PRICES.get(model)
         if price is None:
             raise UnpricedModel(model)
+        if model in self._fail_models:
+            raise UpstreamUnavailable(model)
         prompt_tokens = sum(len(m.get("content", "")) for m in messages) or 1
         usage = Usage(prompt_tokens=prompt_tokens, completion_tokens=8)
         self._charges.append(
