@@ -146,6 +146,8 @@ async def chat_completions(request: Request, authorization: str = Header(default
             status=settlement.status,
             ts=datetime.now(timezone.utc),
             fallback_from=fallback_from,
+            requested_model=model,
+            routed_model=decision.model,
         )
     )
 

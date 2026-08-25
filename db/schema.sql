@@ -27,7 +27,12 @@ CREATE TABLE IF NOT EXISTS ledger_entry (
     ts              TIMESTAMPTZ NOT NULL,
     -- Set when a fallback displaced the originally routed model. NULL is
     -- the common case and means "served as routed", not "unknown".
-    fallback_from   TEXT
+    fallback_from   TEXT,
+    -- The model chain: requested -> routed -> served (the `model` column).
+    -- Gates G1 and G4 each judge one hop. Nullable because rows written
+    -- before Phase 3b have neither, and history must stay readable.
+    requested_model TEXT,
+    routed_model    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ledger_entry_tenant_ts ON ledger_entry (tenant, ts);

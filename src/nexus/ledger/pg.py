@@ -20,7 +20,8 @@ from nexus.ledger.usage import Usage
 _COLUMNS = (
     "entry_id, call_id, tenant, workload, trace_root, span_id, parent_span_id, "
     "model, family, prompt_tokens, completion_tokens, cache_write_tokens, "
-    "cache_read_tokens, cost_nanousd, status, ts, fallback_from"
+    "cache_read_tokens, cost_nanousd, status, ts, fallback_from, "
+    "requested_model, routed_model"
 )
 
 
@@ -38,7 +39,7 @@ class PgLedger:
         with psycopg.connect(self._dsn) as conn:
             conn.execute(
                 f"INSERT INTO ledger_entry ({_COLUMNS}) VALUES ("
-                "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     entry.entry_id,
                     entry.call_id,
@@ -57,6 +58,8 @@ class PgLedger:
                     entry.status,
                     entry.ts,
                     entry.fallback_from,
+                    entry.requested_model,
+                    entry.routed_model,
                 ),
             )
 
@@ -86,6 +89,8 @@ class PgLedger:
                 status=r[14],
                 ts=r[15],
                 fallback_from=r[16],
+                requested_model=r[17],
+                routed_model=r[18],
             )
             for r in rows
         ]

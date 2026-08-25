@@ -140,3 +140,24 @@ def test_ok_rows_still_require_exact_equality():
     entry = _entry("s1", None, 5999)
     upstream = [UpstreamCharge(call_id="c-s1", model="zai/glm-4.6", cost_nanousd=6000)]
     assert [p.kind for p in reconcile([entry], upstream)] == ["amount_mismatch"]
+
+
+def test_entry_records_the_full_model_chain():
+    # requested -> routed -> served. Gates G1 and G4 each own one hop, and
+    # neither can be judged from the ledger without both ends of its hop.
+    e = replace(
+        _entry("s1", None, 100),
+        requested_model="zai/glm-4.6",
+        routed_model="zai/glm-4.6",
+    )
+    assert e.requested_model == "zai/glm-4.6"
+    assert e.routed_model == "zai/glm-4.6"
+
+
+def test_older_rows_without_the_chain_still_load():
+    # Rows written before Phase 3b have neither field. They must remain
+    # readable: a schema change that makes history unreadable turns every
+    # historical audit question into "we don't know".
+    e = _entry("s1", None, 100)
+    assert e.requested_model is None
+    assert e.routed_model is None

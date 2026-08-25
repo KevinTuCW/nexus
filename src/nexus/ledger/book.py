@@ -49,6 +49,14 @@ class Entry:
     #: ledger and not only in the response: a response is read once by one
     #: caller, while the ledger is what anyone asks afterwards.
     fallback_from: str | None = None
+    #: What the tenant asked for, after alias resolution. Gate G1 compares
+    #: this against `routed_model`: a substitution the policy never
+    #: permitted is a violation regardless of what the router believed.
+    requested_model: str | None = None
+    #: What routing settled on, before any fallback. Gate G4 compares this
+    #: against `model`: if the served model differs and `fallback_from`
+    #: does not say so, the fallback was silent in the books.
+    routed_model: str | None = None
 
 
 @dataclass(frozen=True)
