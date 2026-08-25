@@ -29,7 +29,29 @@ Principle: any gate that can fail the delivery must have a failure mode that has
 
 ## Status
 
-Phase 1: deterministic foundation. No LLM, `FakeUpstream` only, ledger in memory. Routing, diversity enforcement, fallback, streaming and Postgres are P2–P3.
+Phase 2b. Routing, gate G1's diversity guard, gate G4's fallback chain,
+streaming metering, non-standard endpoint passthrough, a Postgres ledger and
+Langfuse tracing are all in. Real providers are reached through LiteLLM and
+are **opt-in** (`UPSTREAM=litellm`); the default stays on a deterministic
+fake so a fresh clone cannot bill anyone for running `make test`.
+
+Two tenants have been integrated and measured without a single line changed
+in their repos — see `docs/integration-helpmate.md` and
+`docs/integration-shopscout.md`. The latter also documents a deliberate
+attack on G1: unpinning three jury models collapsed a three-lab jury into
+three copies of one model, cut the bill by 91%, and produced no error of any
+kind.
+
+Still to come in Phase 3: running each tenant's own gates through nexus
+(G3), the four gates wired to `exit 2`, the `wuwork` tenant, and the FinOps
+console.
+
+## Running tests
+
+`make test` is offline and hermetic. `make test-live` loads `.env` into the
+shell and additionally runs the tests marked `live`, which reach real
+providers and a real database. Reaching real providers should be something
+you typed, not something you inherited.
 
 ## Running
 
