@@ -60,6 +60,40 @@ ENDPOINTS: dict[str, Endpoint] = {
 }
 
 
+#: Tenant-facing model names -> canonical ids.
+#:
+#: Zero-touch integration means the tenants cannot be asked to rename
+#: anything. helpmate says `glm-4.7` because that is what z.ai calls it, and
+#: `Qwen/Qwen3-8B` because that is what SiliconFlow calls it. If nexus
+#: demanded canonical ids on the wire, "integration costs zero lines in the
+#: tenant repo" would simply be false -- so speaking the tenant's dialect is
+#: the gateway's job, not theirs.
+#:
+#: Resolution happens at the door, before routing, so everything downstream
+#: -- the policy layer, gate G1, the ledger -- only ever sees canonical ids.
+#: Two hostings of one checkpoint therefore stay one weight family no matter
+#: which name arrived.
+ALIASES: dict[str, str] = {
+    # helpmate's answer and router models.
+    "glm-4.7": "zai/glm-4.7",
+    "glm-4.6": "zai/glm-4.6",
+    "Qwen/Qwen3-8B": "siliconflow/Qwen/Qwen3-8B",
+    # shopscout / wealthwise jury members, as those repos name them.
+    "Qwen/Qwen3-235B-A22B": "siliconflow/Qwen/Qwen3-235B-A22B",
+    "deepseek-ai/DeepSeek-V3": "siliconflow/deepseek-ai/DeepSeek-V3",
+}
+
+
+def canonical_model(model: str) -> str:
+    """Resolve a tenant-facing model name to a canonical id.
+
+    Unknown names come back untouched: the price check downstream produces a
+    better error, one that names the model the tenant actually sent rather
+    than something this table invented.
+    """
+    return ALIASES.get(model, model)
+
+
 def endpoint_for(model: str) -> Endpoint:
     """Transport details for a model id. Raises KeyError if unregistered."""
     return ENDPOINTS[model]

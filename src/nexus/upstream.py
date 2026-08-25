@@ -47,6 +47,22 @@ PRICES: dict[str, Price] = {
     ),
 }
 
+#: Embedding models are priced per input token and produce no completion,
+#: so they live in their own table rather than carrying a meaningless
+#: `completion` rate in the main one. They are billed, unlike rerank: the
+#: provider reports token counts, so there is a real number to record, and
+#: leaving it out would hide the whole ingestion cost of the one tenant this
+#: platform most needs to account for.
+EMBEDDING_PRICES: dict[str, Price] = {
+    "Qwen/Qwen3-Embedding-8B": Price(
+        prompt=nanousd_per_token("0.05"), completion=0
+    ),
+    "Qwen/Qwen3-Embedding-4B": Price(
+        prompt=nanousd_per_token("0.03"), completion=0
+    ),
+    "BAAI/bge-m3": Price(prompt=nanousd_per_token("0.01"), completion=0),
+}
+
 
 class UnpricedModel(Exception):
     """We have no price for this model, so we will not serve it.

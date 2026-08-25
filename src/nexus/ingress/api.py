@@ -25,6 +25,7 @@ from nexus.obs import span
 from nexus.policy.diversity import DiversityExhausted, DiversityViolation, guard
 from nexus.policy.fallback import fallback_chain
 from nexus.policy.routing import choose
+from nexus.providers import canonical_model
 from nexus.registry.families import family_of
 from nexus.state import get_state
 from nexus.upstream import PRICES, UpstreamUnavailable
@@ -41,11 +42,19 @@ async def chat_completions(request: Request, authorization: str = Header(default
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     body = await request.json()
-    model = body.get("model", "")
+    requested_name = body.get("model", "")
     messages = body.get("messages", [])
 
+    # Resolved at the door. Everything below -- routing, the diversity
+    # guard, the ledger -- sees canonical ids only, so a tenant's own naming
+    # can never reach the place where weight families are decided.
+    model = canonical_model(requested_name)
+
     if model not in PRICES:
-        raise HTTPException(status_code=400, detail=f"no price on file for model '{model}'")
+        raise HTTPException(
+            status_code=400,
+            detail=f"no price on file for model '{requested_name}'",
+        )
 
     policy = state.policies[tenant]
     decision = choose(policy, model, PRICES)

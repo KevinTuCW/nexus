@@ -177,3 +177,73 @@ def test_live_rerank_reaches_siliconflow(client):
     # The reset instructions must outrank the battery datasheet.
     best = max(results, key=lambda x: x["relevance_score"])
     assert best["index"] == 0
+
+
+def test_rerank_is_also_reachable_under_the_v1_prefix(client, monkeypatch):
+    # helpmate builds its rerank URL as `{embed_base_url}/rerank`, and that
+    # base already ends in /v1 -- so pointing it at nexus makes it call
+    # /v1/rerank. Measured against the running gateway, not guessed. A
+    # tenant integrated zero-touch cannot be asked to drop the prefix.
+    class _R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-provider")
+    monkeypatch.setattr("nexus.ingress.passthrough._post", lambda **kw: _R())
+    r = client.post(
+        "/v1/rerank",
+        json={"model": "Qwen/Qwen3-Reranker-8B", "query": "q", "documents": ["a"]},
+        headers={"Authorization": "Bearer sk-helpmate"},
+    )
+    assert r.status_code == 200
+    assert "/v1/rerank" in PASSTHROUGH_PATHS or "/rerank" in PASSTHROUGH_PATHS
+
+
+def test_embeddings_are_forwarded_and_billed(client, monkeypatch):
+    # Unlike rerank, embeddings are priced per token and the provider says
+    # how many were used. Leaving them unbilled would hide helpmate's entire
+    # ingestion cost -- from the tenant whose cost attribution this platform
+    # exists to produce.
+    class _R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": [{"embedding": [0.1, 0.2], "index": 0}],
+                "model": "Qwen/Qwen3-Embedding-8B",
+                "usage": {"prompt_tokens": 120, "total_tokens": 120},
+            }
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-provider")
+    monkeypatch.setattr("nexus.ingress.passthrough._post", lambda **kw: _R())
+    r = client.post(
+        "/v1/embeddings",
+        json={"model": "Qwen/Qwen3-Embedding-8B", "input": "hello"},
+        headers={"Authorization": "Bearer sk-helpmate"},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"][0]["embedding"] == [0.1, 0.2]
+
+    entries = get_state().ledger.entries()
+    assert len(entries) == 1
+    assert entries[0].tenant == "helpmate"
+    assert entries[0].workload == "embeddings"
+    assert entries[0].usage.prompt_tokens == 120
+    assert entries[0].cost_nanousd > 0
+
+
+def test_embeddings_for_an_unpriced_model_are_refused(client, monkeypatch):
+    # Same rule as chat: serving a model with no price writes a zero-cost
+    # row that reconciles perfectly against nothing.
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-provider")
+    r = client.post(
+        "/v1/embeddings",
+        json={"model": "nobody/unpriced-embedder", "input": "hello"},
+        headers={"Authorization": "Bearer sk-helpmate"},
+    )
+    assert r.status_code == 400
+    assert get_state().ledger.entries() == []
