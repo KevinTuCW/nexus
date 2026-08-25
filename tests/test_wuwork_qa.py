@@ -20,8 +20,15 @@ def test_answer_grounds_on_retrieved_documents():
     # The retrieved text must actually reach the model. A "RAG" pipeline
     # that retrieves and then ignores the result is a plain chat call with
     # extra latency, and nothing downstream would notice.
+    #
+    # The anchor is a phrase that appears ONLY in the document, never in the
+    # question. The first version of this test asserted on "报销", which is
+    # in the question itself -- so it held whether or not the context was
+    # ever built. It claimed to check grounding and checked nothing. Found
+    # by deleting the context and watching the test stay green.
     joined = " ".join(m["content"] for m in client.seen)
-    assert "报销" in joined
+    assert "出差住宿费怎么报销" in joined  # the question reached the model
+    assert "虚报" in joined  # ...and so did the document, which the question never says
 
 
 def test_answer_reports_which_documents_it_used():
