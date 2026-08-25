@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     policies_dir: Path = Path("policies")
     upstream_timeout_s: int = 60
+    # "fake" | "litellm". Opt-in on purpose: a default of "litellm" would
+    # mean a fresh clone running `make test` could reach real providers and
+    # bill someone real money.
+    upstream: str = "fake"
     # Money is stored as integer nano-USD everywhere; see nexus.money for
     # why cents cannot be used. Exposed as a setting only so the value is
     # discoverable, not so it can be changed.

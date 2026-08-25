@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from nexus.state import State, get_state
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "nexus"
@@ -52,3 +54,39 @@ def test_no_module_imports_the_app_to_reach_state():
                     if alias.name.startswith("nexus.app"):
                         offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
     assert offenders == [], f"these modules import nexus.app: {offenders}"
+
+
+def test_default_upstream_is_the_fake_one(monkeypatch, policies_dir):
+    from nexus.upstream import FakeUpstream
+
+    monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
+    get_state.cache_clear()
+    try:
+        assert isinstance(get_state().upstream, FakeUpstream)
+    finally:
+        get_state.cache_clear()
+
+
+def test_litellm_upstream_is_opt_in(monkeypatch, policies_dir):
+    # Opt-in, never the default. A test run or a fresh clone that silently
+    # reached real providers would bill someone real money for a `make test`.
+    from nexus.upstream_litellm import LiteLLMUpstream
+
+    monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
+    monkeypatch.setenv("UPSTREAM", "litellm")
+    get_state.cache_clear()
+    try:
+        assert isinstance(get_state().upstream, LiteLLMUpstream)
+    finally:
+        get_state.cache_clear()
+
+
+def test_unknown_upstream_name_is_refused(monkeypatch, policies_dir):
+    monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
+    monkeypatch.setenv("UPSTREAM", "typo")
+    get_state.cache_clear()
+    try:
+        with pytest.raises(ValueError):
+            get_state()
+    finally:
+        get_state.cache_clear()

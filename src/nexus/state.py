@@ -37,9 +37,31 @@ def get_state() -> State:
     """
     settings = get_settings()
     policies = load_policies(settings.policies_dir)
+
+    upstream: Upstream
+    if settings.upstream == "fake":
+        upstream = FakeUpstream()
+    elif settings.upstream == "litellm":
+        # Imported here rather than at module level. Measured, not assumed:
+        # this alone is *not* what keeps `import nexus.app` free of LiteLLM
+        # -- `upstream_litellm` also imports the SDK lazily, inside its
+        # transport functions, and either layer suffices on its own.
+        # Breaking one leaves `tests/test_no_network.py` green; only
+        # breaking both turns it red. Two layers is deliberate: the import
+        # here keeps a fake-upstream process from paying LiteLLM's import
+        # cost (~10s), and the one over there keeps that true even if this
+        # module is later rewritten.
+        from nexus.upstream_litellm import LiteLLMUpstream
+
+        upstream = LiteLLMUpstream(timeout_s=settings.upstream_timeout_s)
+    else:
+        raise ValueError(
+            f"unknown UPSTREAM '{settings.upstream}'; expected 'fake' or 'litellm'"
+        )
+
     return State(
         policies=policies,
         key_index=build_key_index(policies),
         ledger=InMemoryLedger(),
-        upstream=FakeUpstream(),
+        upstream=upstream,
     )
