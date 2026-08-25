@@ -16,7 +16,18 @@ A sixth sibling project, `medscope` (chest-X-ray reading), is deliberately **not
 
 ## The zero-touch contract
 
-Incumbent tenant checkouts must have an empty `git status --porcelain` before and after any conformance run; anything that requires editing a tenant repo is not a nexus capability.
+Integrating a tenant requires **no edit to its code**: base URLs come from
+the environment, and model names are resolved by the gateway rather than
+imposed on the caller. That is the claim, and `scripts/verify_tenant.py`
+checks it.
+
+It is not a claim that running a tenant's own gate has no side effects.
+Evals write reports; helpmate's rewrites `eval/report.md` every run. The
+conformance runner therefore refuses to start against an already-dirty
+checkout, restores tracked files afterwards, and lists any untracked files
+the gate created. An earlier version of this section claimed the checkout
+was byte-identical before and after — that was false, and gate G3 is what
+proved it.
 
 ## Gates
 
@@ -26,6 +37,13 @@ Incumbent tenant checkouts must have an empty `git status --porcelain` before an
 - **G4** — fallback is never silent.
 
 Principle: any gate that can fail the delivery must have a failure mode that has been demonstrated.
+
+**G3 has two arms, and they prove different things.** The offline arm runs
+`wuwork`'s gate, which never crosses the gateway: it proves wuwork still
+works, not that integration changed nothing. The live arm points a real
+tenant's gate at nexus and compares against the baseline captured before
+integration — that is the actual claim, and it needs real credentials, so it
+runs under `make test-live` and is skipped without them.
 
 ## Status
 

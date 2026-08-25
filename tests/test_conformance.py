@@ -90,3 +90,50 @@ def test_pretty_printed_json_is_parsed_too(policies):
     outcome = run_tenant_gate(pretty, env_overrides={})
     assert outcome.metrics_unavailable is False
     assert outcome.metrics == {"a": 1, "b": 2}
+
+
+def test_a_dirty_checkout_is_refused_before_running(policies, tmp_path):
+    # We cannot tell our own changes from someone else's, and restoring
+    # afterwards would destroy their work. Refusing is the only safe move.
+    import subprocess as sp
+    from dataclasses import replace
+
+    repo = tmp_path / "tenant"
+    repo.mkdir()
+    sp.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "config", "user.email", "t@e.com"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "f.txt").write_text("a\n")
+    sp.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+    (repo / "f.txt").write_text("dirty\n")
+
+    dirty = replace(policies["helpmate"], repo_path=repo, gate_command="true")
+    outcome = run_tenant_gate(dirty, env_overrides={})
+    assert outcome.unverifiable is True
+    assert outcome.passed is False
+
+
+def test_a_gate_that_writes_into_the_repo_is_restored_and_reported(policies, tmp_path):
+    # Measured against helpmate: its eval rewrites a tracked report file.
+    # That is normal behaviour for an eval, and it means the runner has to
+    # clean up after the tenant rather than pretend nothing happened.
+    import subprocess as sp
+    from dataclasses import replace
+
+    repo = tmp_path / "tenant"
+    repo.mkdir()
+    sp.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "config", "user.email", "t@e.com"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "report.md").write_text("old\n")
+    sp.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+
+    writer = replace(
+        policies["helpmate"], repo_path=repo,
+        gate_command="sh -c 'echo new > report.md'",
+    )
+    outcome = run_tenant_gate(writer, env_overrides={})
+    assert outcome.restored, "the runner must report what it put back"
+    assert (repo / "report.md").read_text() == "old\n"

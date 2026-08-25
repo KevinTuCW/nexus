@@ -29,6 +29,19 @@ runner that lies:
     output format, not a tenant getting worse. Reporting it as a quality
     regression sends someone hunting a bug that does not exist; reporting a
     real failure as a format change lets a red gate hide.
+
+**Running a tenant's own gate is not free of side effects, and this module
+used to imply it was.** Pointing the runner at helpmate's `make gate`
+rewrote `eval/report.md` — a git-tracked file, changed by helpmate's eval
+doing exactly what an eval does. The zero-touch claim this project makes is
+narrower and true: integrating costs no edit to a tenant's code. It was
+never a claim that running a tenant's tests has no side effects, and no
+test suite anywhere has that property. So the runner now refuses to start
+against a checkout that is already dirty (it cannot tell its own changes
+from someone else's), restores the tracked files it disturbed once the gate
+has run, and lists — without deleting — any untracked files the gate
+created. A checkout it cannot put back to clean is reported unverifiable:
+a checkout we could not restore is one we can no longer make claims about.
 """
 
 import json
@@ -38,6 +51,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from nexus.assurance.isolation import RepoStatus, working_tree_status
 from nexus.registry.tenants import TenantPolicy
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -63,6 +77,12 @@ class GateOutcome:
     metrics_unavailable: bool = False
     metrics: dict = field(default_factory=dict)
     output_tail: str = ""
+    #: What the runner found and put back after the gate left a genuine
+    #: tenant checkout dirty. Tracked paths are restored via
+    #: `git checkout -- .` and appear here as-is; untracked paths the gate
+    #: created are listed too, suffixed to make clear they were left alone --
+    #: deleting a file we did not create is a bigger risk than leaving it.
+    restored: tuple[str, ...] = ()
 
 
 def _parse_metrics(stdout: str) -> dict | None:
@@ -93,6 +113,36 @@ def _parse_metrics(stdout: str) -> dict | None:
     return None
 
 
+def _git_status_lines(cwd: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=cwd, capture_output=True, text=True,
+    )
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _restore_checkout(cwd: Path) -> tuple[tuple[str, ...], bool]:
+    """Put back what the gate changed in a tracked file, and report the rest.
+
+    `git checkout -- .` restores every tracked path the gate modified or
+    deleted; it never touches untracked paths, because a file the gate
+    created might be worth keeping and deleting something we did not create
+    is the bigger risk. Returns every path worth reporting -- restored and
+    merely noted -- and whether the tracked half of the tree actually came
+    back clean.
+    """
+    before = _git_status_lines(cwd)
+    tracked = [line[3:] for line in before if not line.startswith("??")]
+    untracked = [line[3:] for line in before if line.startswith("??")]
+    if tracked:
+        subprocess.run(["git", "checkout", "--", "."], cwd=cwd, capture_output=True, text=True)
+
+    after = _git_status_lines(cwd)
+    still_dirty_tracked = [line for line in after if not line.startswith("??")]
+
+    report = tuple(tracked) + tuple(f"{p} (untracked, left in place)" for p in untracked)
+    return report, not still_dirty_tracked
+
+
 def run_tenant_gate(
     policy: TenantPolicy,
     env_overrides: dict[str, str],
@@ -108,6 +158,28 @@ def run_tenant_gate(
             passed=False,
             unverifiable=True,
             output_tail=f"checkout not found at {cwd}",
+        )
+
+    # The isolation dance below only applies to a genuine tenant checkout
+    # living outside this repo. wuwork's cwd is REPO_ROOT itself -- treating
+    # this repo's own working tree as something to snapshot and restore would
+    # fight the very commits this project's own development makes here. The
+    # zero-touch contract was always about the four incumbent checkouts, not
+    # about nexus's own repo policing its own uncommitted work.
+    guard_isolation = policy.repo_path is not None
+
+    if guard_isolation and working_tree_status(Path(cwd)) == RepoStatus.DIRTY:
+        return GateOutcome(
+            tenant=policy.tenant,
+            command=policy.gate_command,
+            exit_code=None,
+            passed=False,
+            unverifiable=True,
+            output_tail=(
+                f"checkout at {cwd} is already dirty before the run; refusing "
+                "to start -- we cannot tell our changes from someone else's, "
+                "and restoring afterwards would destroy their work"
+            ),
         )
 
     env = {**os.environ, **env_overrides}
@@ -146,6 +218,23 @@ def run_tenant_gate(
 
     metrics = _parse_metrics(proc.stdout)
     tail = (proc.stdout + proc.stderr)[-2000:]
+
+    restored: tuple[str, ...] = ()
+    if guard_isolation and working_tree_status(Path(cwd)) == RepoStatus.DIRTY:
+        restored, ok = _restore_checkout(Path(cwd))
+        if not ok:
+            return GateOutcome(
+                tenant=policy.tenant,
+                command=policy.gate_command,
+                exit_code=proc.returncode,
+                passed=False,
+                unverifiable=True,
+                metrics_unavailable=metrics is None,
+                metrics=metrics or {},
+                output_tail=tail + "\ncould not restore the checkout to clean after the gate ran",
+                restored=restored,
+            )
+
     return GateOutcome(
         tenant=policy.tenant,
         command=policy.gate_command,
@@ -154,4 +243,5 @@ def run_tenant_gate(
         metrics_unavailable=metrics is None,
         metrics=metrics or {},
         output_tail=tail,
+        restored=restored,
     )

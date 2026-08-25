@@ -17,15 +17,19 @@ each gate is meant to catch.
 Missing evidence is never a violation. Rows written before Phase 3b carry no
 model chain, and a gate that fired on them would be reporting its own blind
 spot as the tenant's fault. What to do about evidence that *should* exist
-and does not is G3's question, not this module's.
+and does not is G3's question, not the other three gates'.
 """
 
 import argparse
+import json
+import shutil
 import sys
+import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from nexus.assurance.baseline import compare
 from nexus.ledger.book import Entry, UpstreamCharge, reconcile
 from nexus.ledger.usage import Usage
 from nexus.registry.families import family_of
@@ -125,6 +129,52 @@ def check_g2_attribution_error_is_zero(
     return [f"G2 {d.kind}: {d.detail}" for d in reconcile(rows, charges)]
 
 
+def check_g3_tenant_gates_have_not_regressed(
+    current: dict[str, dict], baselines_dir: Path
+) -> list[str]:
+    """G3: integrating with nexus did not make any tenant worse.
+
+    Two arms, and they prove different things.
+
+    The **offline arm** runs wuwork's gate, which never crosses the gateway.
+    It proves wuwork still works; it cannot prove that integration changed
+    nothing, because nothing about it goes through nexus. Reporting it as
+    the whole of G3 would hang the gate's name on a check that cannot reach
+    the gate's subject.
+
+    The **live arm** points a real tenant's gate at nexus and compares
+    against the baseline captured before integration. That is the actual
+    claim. It needs real credentials and real time, so it is marked `live`
+    and skipped without them — never silently passed.
+
+    A tenant with no baseline is reported, not waved through. Silence is the
+    cheapest way to make this gate green: stop producing a number and the
+    comparison has nothing left to complain about.
+    """
+    violations = []
+    baselines = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(baselines_dir.glob("*.json"))
+    }
+    for tenant, metrics in current.items():
+        base = baselines.get(tenant)
+        if base is None:
+            violations.append(
+                f"G3 tenant '{tenant}' has no baseline; this is not a pass, "
+                "it is an unanswered question"
+            )
+            continue
+        for regression in compare(base, metrics):
+            violations.append(f"G3 tenant '{tenant}': {regression.detail}")
+    for tenant in baselines:
+        if tenant not in current:
+            violations.append(
+                f"G3 tenant '{tenant}' has a baseline but produced no current "
+                "run; a gate that stopped running has not started passing"
+            )
+    return violations
+
+
 def _demo_row(gate: str) -> Entry:
     """One row carrying exactly the failure `gate` is meant to catch."""
     base = Entry(
@@ -161,19 +211,44 @@ def _demo_charge() -> UpstreamCharge:
     return UpstreamCharge(call_id="demo-unbooked", model="zai/glm-4.6", cost_nanousd=6000)
 
 
+def _demo_g3_baselines_dir() -> str:
+    """A throwaway baselines directory for the g3 failure demo.
+
+    Not `baselines/`: this demo must not depend on the real baseline
+    numbers staying put, and must not get quietly "fixed" by someone
+    updating a real baseline file rather than the code that regressed.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="nexus-g3-demo-")
+    Path(tmp_dir, "demo-tenant.json").write_text(
+        json.dumps({"refusal_correctness": 1.0}), encoding="utf-8"
+    )
+    return tmp_dir
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--fail-demo",
-        choices=["g1", "g2", "g4"],
+        choices=["g1", "g2", "g3", "g4"],
         help="inject the failure this gate is meant to catch, and prove it fires",
     )
     args = ap.parse_args()
 
     rows: list[Entry] = []
     charges: list[UpstreamCharge] = []
+    current: dict[str, dict] = {}
+    BASELINES_DIR = Path(__file__).resolve().parents[2] / "baselines"
+    conformance_ran = False
+    demo_baselines_dir = None
+
     if args.fail_demo == "g2":
         charges.append(_demo_charge())
+    elif args.fail_demo == "g3":
+        # A hard metric slipping below a synthetic baseline, in a directory
+        # this demo controls -- see _demo_g3_baselines_dir.
+        demo_baselines_dir = _demo_g3_baselines_dir()
+        current = {"demo-tenant": {"refusal_correctness": 0.5}}
+        conformance_ran = True
     elif args.fail_demo:
         row = _demo_row(args.fail_demo)
         rows.append(row)
@@ -192,6 +267,16 @@ def main() -> int:
         "G2": check_g2_attribution_error_is_zero(rows, charges),
         "G4": check_g4_fallback_is_never_silent(rows),
     }
+    if conformance_ran:
+        results["G3"] = check_g3_tenant_gates_have_not_regressed(
+            current, Path(demo_baselines_dir)
+        )
+        shutil.rmtree(demo_baselines_dir, ignore_errors=True)
+    else:
+        # No conformance run happened in this invocation, so G3 has no
+        # evidence to judge -- that is neither a pass nor a failure, and
+        # the report says so rather than defaulting to either.
+        print("G3: no conformance run in this invocation", file=sys.stderr)
 
     failed = False
     for name, violations in results.items():
