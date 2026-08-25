@@ -23,6 +23,15 @@ _ISOLATED_PREFIXES = ("OPENAI_", "LANGFUSE_", "NEXUS_")
 
 def _settings_env_names() -> set[str]:
     names = set(Settings.model_fields)
+    # Provider key variables are named in providers.ENDPOINTS as *values*,
+    # not as Settings fields, so neither the field-name sweep above nor the
+    # prefix sweep below would clear them -- a developer's real GLM or
+    # SiliconFlow key would stay visible to the whole suite. Deriving them
+    # from the registry keeps a newly added provider isolated automatically,
+    # for the same reason the field list is derived rather than typed out.
+    from nexus.providers import ENDPOINTS
+
+    names |= {e.api_key_env for e in ENDPOINTS.values()}
     return {n.upper() for n in names} | {n.lower() for n in names}
 
 
