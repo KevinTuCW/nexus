@@ -26,7 +26,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nexus.ledger.book import Entry
+from nexus.ledger.book import Entry, UpstreamCharge, reconcile
 from nexus.ledger.usage import Usage
 from nexus.registry.families import family_of
 from nexus.registry.tenants import TenantPolicy, load_policies, substitution_allowed
@@ -104,6 +104,27 @@ def check_g1_diversity_is_never_collapsed(
     return violations
 
 
+def check_g2_attribution_error_is_zero(
+    rows: list[Entry], charges: list[UpstreamCharge]
+) -> list[str]:
+    """G2: the ledger agrees with what providers said they charged.
+
+    The one gate that reuses an existing judgement — `reconcile()` — and the
+    reuse is deliberate. `reconcile` is not a helper that happens to be
+    useful here; it *is* the definition of this gate, including the rule
+    that `aborted` rows are a lower bound rather than a measurement.
+    Reimplementing it would not buy independence, only a second copy free to
+    drift from the first, and a gate whose definition exists in two places
+    is a gate with two definitions.
+
+    What this does not buy, and the README says so: independence from the
+    provider. `charges` is derived from the provider's own response, so a
+    provider that under-reports is reproduced faithfully. The genuinely
+    independent source would be its billing API, which is not integrated.
+    """
+    return [f"G2 {d.kind}: {d.detail}" for d in reconcile(rows, charges)]
+
+
 def _demo_row(gate: str) -> Entry:
     """One row carrying exactly the failure `gate` is meant to catch."""
     base = Entry(
@@ -129,23 +150,46 @@ def _demo_row(gate: str) -> Entry:
     raise SystemExit(f"no failure demo defined for gate '{gate}'")
 
 
+def _demo_charge() -> UpstreamCharge:
+    """A provider charge the books have never heard of.
+
+    G2's failure lives on the other side of the comparison from G1's and
+    G4's, so it cannot be expressed as a ledger row. That asymmetry is the
+    gate's point: G2 is the only one that looks outside nexus for its
+    evidence.
+    """
+    return UpstreamCharge(call_id="demo-unbooked", model="zai/glm-4.6", cost_nanousd=6000)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--fail-demo",
-        choices=["g1", "g4"],
+        choices=["g1", "g2", "g4"],
         help="inject the failure this gate is meant to catch, and prove it fires",
     )
     args = ap.parse_args()
 
     rows: list[Entry] = []
-    if args.fail_demo:
-        rows.append(_demo_row(args.fail_demo))
+    charges: list[UpstreamCharge] = []
+    if args.fail_demo == "g2":
+        charges.append(_demo_charge())
+    elif args.fail_demo:
+        row = _demo_row(args.fail_demo)
+        rows.append(row)
+        # A charge that matches the demo row exactly, so the failure this
+        # demo is meant to catch is the only one that fires -- not G2's,
+        # which is about the ledger disagreeing with the provider, not
+        # about the substance of this row.
+        charges.append(
+            UpstreamCharge(call_id=row.call_id, model=row.model, cost_nanousd=row.cost_nanousd)
+        )
 
     policies = load_policies(Path(__file__).resolve().parents[2] / "policies")
 
     results = {
         "G1": check_g1_diversity_is_never_collapsed(rows, policies),
+        "G2": check_g2_attribution_error_is_zero(rows, charges),
         "G4": check_g4_fallback_is_never_silent(rows),
     }
 
