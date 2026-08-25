@@ -44,6 +44,11 @@ class Entry:
     cost_nanousd: int
     status: Literal["ok", "aborted", "failed"]
     ts: datetime
+    #: The model this call was originally routed to, when a fallback moved
+    #: it elsewhere. Gate G4 requires that a fallback leave a trace in the
+    #: ledger and not only in the response: a response is read once by one
+    #: caller, while the ledger is what anyone asks afterwards.
+    fallback_from: str | None = None
 
 
 @dataclass(frozen=True)

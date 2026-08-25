@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS ledger_entry (
     cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
     cost_nanousd    BIGINT NOT NULL,
     status          TEXT NOT NULL CHECK (status IN ('ok', 'aborted', 'failed')),
-    ts              TIMESTAMPTZ NOT NULL
+    ts              TIMESTAMPTZ NOT NULL,
+    -- Set when a fallback displaced the originally routed model. NULL is
+    -- the common case and means "served as routed", not "unknown".
+    fallback_from   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ledger_entry_tenant_ts ON ledger_entry (tenant, ts);

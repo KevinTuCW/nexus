@@ -87,3 +87,30 @@ def test_ledger_totals_never_use_floats():
         book.record(_entry("s1", "root", 1))
     assert rollup(book.entries())["t-1"] == 100_000
     assert isinstance(rollup(book.entries())["t-1"], int)
+
+
+def test_entry_defaults_to_no_fallback():
+    e = _entry("s1", None, 100)
+    assert e.fallback_from is None
+
+
+def test_entry_records_which_model_was_displaced():
+    # Gate G4: a fallback that leaves no trace in the ledger is a silent
+    # fallback, whatever the response body says.
+    e = Entry(
+        entry_id="e-1",
+        call_id="c-1",
+        tenant="wuwork",
+        workload="default",
+        trace_root=None,
+        span_id="s-1",
+        parent_span_id=None,
+        model="zai/glm-4.7",
+        family="glm",
+        usage=Usage(prompt_tokens=1, completion_tokens=1),
+        cost_nanousd=1,
+        status="ok",
+        ts=TS,
+        fallback_from="zai/glm-4.6",
+    )
+    assert e.fallback_from == "zai/glm-4.6"
