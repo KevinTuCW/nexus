@@ -17,6 +17,7 @@ from functools import lru_cache
 from nexus.config import get_settings
 from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
+from nexus.policy.diversity import GroupLedger
 from nexus.registry.tenants import TenantPolicy, load_policies
 from nexus.upstream import FakeUpstream, Upstream
 
@@ -27,6 +28,8 @@ class State:
     key_index: dict[str, str]
     ledger: Ledger
     upstream: Upstream
+    #: Per-group weight-family reservations, for native tenants only.
+    groups: GroupLedger
 
 
 @lru_cache(maxsize=1)
@@ -74,4 +77,5 @@ def get_state() -> State:
         key_index=build_key_index(policies),
         ledger=ledger,
         upstream=upstream,
+        groups=GroupLedger(),
     )

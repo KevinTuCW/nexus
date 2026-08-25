@@ -13,6 +13,7 @@ path is worse than an absent one.
 """
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -21,7 +22,7 @@ from nexus.ingress.auth import AuthError, authenticate
 from nexus.ledger.book import Entry
 from nexus.ledger.session import meter
 from nexus.obs import span
-from nexus.policy.diversity import DiversityViolation, guard
+from nexus.policy.diversity import DiversityExhausted, DiversityViolation, guard
 from nexus.policy.fallback import fallback_chain
 from nexus.policy.routing import choose
 from nexus.registry.families import family_of
@@ -55,6 +56,38 @@ async def chat_completions(request: Request, authorization: str = Header(default
         # request is the honest outcome: serving the requested model anyway
         # would hide a routing bug behind a correct-looking answer.
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    group_id = body.get("nexus_diversity_group")
+    if group_id is not None:
+        if policy.integration != "native":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "diversity groups require native integration; a zero-touch "
+                    "tenant's call structure is not visible to nexus, and "
+                    "accepting a group id would imply otherwise"
+                ),
+            )
+        candidates = (decision.model, *fallback_chain(policy, decision, PRICES))
+        try:
+            served = state.groups.reserve(group_id, list(candidates))
+        except DiversityExhausted as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        decision = replace(
+            decision, model=served, substituted=served != decision.requested
+        )
+        # Re-guarded on purpose. Group selection is itself a substitution,
+        # and skipping the guard here would open a G1 bypass along the
+        # "group" path specifically.
+        #
+        # Honest note: this call cannot fail today. Candidates are drawn
+        # from `fallback_chain`, which only yields models the policy already
+        # permits, so `guard` has nothing to reject -- deleting this line
+        # turns no test red. It stays as defence against a future change to
+        # how candidates are built, which is exactly the kind of change that
+        # happens quietly. It is an assertion, not a gate, and is not
+        # dressed up as one.
+        guard(policy, decision)
 
     attempts = (decision.model, *fallback_chain(policy, decision, PRICES))
     last_error: Exception | None = None
