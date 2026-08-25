@@ -1,0 +1,7 @@
+{
+  "retrieval_accuracy": 1.0,
+  "refusal_correctness": 1.0,
+  "n_cases": 12,
+  "captured_at": "2026-08-25T15:36:37+00:00",
+  "note": "Captured before any gateway-side change; this is what wuwork scored on its own."
+}
