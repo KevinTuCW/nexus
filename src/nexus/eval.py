@@ -24,9 +24,12 @@ import argparse
 import sys
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from nexus.ledger.book import Entry
 from nexus.ledger.usage import Usage
+from nexus.registry.families import family_of
+from nexus.registry.tenants import TenantPolicy, load_policies, substitution_allowed
 
 
 def check_g4_fallback_is_never_silent(rows: list[Entry]) -> list[str]:
@@ -60,6 +63,47 @@ def check_g4_fallback_is_never_silent(rows: list[Entry]) -> list[str]:
     return violations
 
 
+def check_g1_diversity_is_never_collapsed(
+    rows: list[Entry], policies: dict[str, TenantPolicy]
+) -> list[str]:
+    """G1: routing never substituted a model the tenant did not permit.
+
+    This is the after-the-fact half of gate G1. `policy.diversity.guard`
+    already refuses such a substitution on the request path; this checks the
+    books independently, and the two are deliberately not the same code.
+    The request-path guard is a single line in a handler — one edit removes
+    it, and nothing else in the system would notice. This one would.
+
+    Permission is re-derived from the tenant's policy rather than from the
+    weight family. `zai/glm-4.6 -> zai/glm-4.7` stays inside one family and
+    a family-only check would wave it through, but shopscout permits no
+    substitution at all. The rule was never "same family"; it was "what the
+    tenant declared".
+    """
+    violations = []
+    for row in rows:
+        if row.requested_model is None or row.routed_model is None:
+            continue
+        if row.routed_model == row.requested_model:
+            continue
+        policy = policies.get(row.tenant)
+        if policy is None:
+            violations.append(
+                f"G1 call {row.call_id}: tenant '{row.tenant}' has no policy, "
+                "so this substitution cannot be judged -- refusing to treat "
+                "a missing policy as permission"
+            )
+            continue
+        target = family_of(row.routed_model)
+        if not substitution_allowed(policy, row.requested_model, target):
+            violations.append(
+                f"G1 call {row.call_id}: tenant '{row.tenant}' asked for "
+                f"{row.requested_model}, routing chose {row.routed_model} "
+                f"(family '{target}'), which the policy does not permit"
+            )
+    return violations
+
+
 def _demo_row(gate: str) -> Entry:
     """One row carrying exactly the failure `gate` is meant to catch."""
     base = Entry(
@@ -73,6 +117,15 @@ def _demo_row(gate: str) -> Entry:
     if gate == "g4":
         # Served by something routing never chose, with nothing saying why.
         return replace(base, model="zai/glm-4.7")
+    if gate == "g1":
+        # A pinned juror served from another lab: the Phase 2b failure,
+        # reproducible on demand.
+        return replace(
+            base,
+            tenant="shopscout",
+            routed_model="siliconflow/Qwen/Qwen3-8B",
+            model="siliconflow/Qwen/Qwen3-8B",
+        )
     raise SystemExit(f"no failure demo defined for gate '{gate}'")
 
 
@@ -80,7 +133,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--fail-demo",
-        choices=["g4"],
+        choices=["g1", "g4"],
         help="inject the failure this gate is meant to catch, and prove it fires",
     )
     args = ap.parse_args()
@@ -89,7 +142,12 @@ def main() -> int:
     if args.fail_demo:
         rows.append(_demo_row(args.fail_demo))
 
-    results = {"G4": check_g4_fallback_is_never_silent(rows)}
+    policies = load_policies(Path(__file__).resolve().parents[2] / "policies")
+
+    results = {
+        "G1": check_g1_diversity_is_never_collapsed(rows, policies),
+        "G4": check_g4_fallback_is_never_silent(rows),
+    }
 
     failed = False
     for name, violations in results.items():
