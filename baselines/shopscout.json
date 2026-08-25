@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-08-25T15:48:07+00:00",
+  "compliance_leaks": 0,
+  "decision_accuracy": 1.0,
+  "false_positive_rate": 0.0,
+  "golden_cases": 51,
+  "injection_block_rate": 1.0,
+  "invariance_pass_rate": 1.0,
+  "note": "Captured with the tenant running against its own providers, before any nexus-side routing change. This is the number integration must not make worse.",
+  "pass_rate": 1.0,
+  "passed": 51,
+  "status_accuracy": 1.0,
+  "suites": [
+    "golden",
+    "compliance",
+    "injection",
+    "false_positive",
+    "robustness",
+    "jury_divergence"
+  ],
+  "total": 51
+}

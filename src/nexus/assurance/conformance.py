@@ -66,21 +66,30 @@ class GateOutcome:
 
 
 def _parse_metrics(stdout: str) -> dict | None:
-    """Tenants print one JSON object on stdout. Tolerate surrounding noise.
+    """Find the last JSON object on stdout. Tolerate surrounding noise.
 
-    Scans from the last line backwards: `make` echoes the command it is
-    about to run, and other tooling adds its own chatter, so the gate's own
-    output is what comes last.
+    Scans backwards from each `{` and lets the decoder consume as much as it
+    needs, so an object spanning many lines parses. `make` echoes the
+    command it is about to run and other tooling adds its own chatter, so
+    the gate's own output is what comes last.
+
+    The first version read one line at a time and therefore understood only
+    compact output. It looked correct against shopscout and silently
+    reported "no metrics" for wealthwise, whose gate pretty-prints — a
+    tenant doing something completely ordinary. A runner that accepts one
+    formatting style is a runner that mislabels formatting as absence, and
+    absence is what it would then have compared baselines against.
     """
-    for line in reversed(stdout.strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+    decoder = json.JSONDecoder()
+    for idx in range(len(stdout) - 1, -1, -1):
+        if stdout[idx] != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(stdout[idx:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return parsed
     return None
 
 
@@ -102,6 +111,20 @@ def run_tenant_gate(
         )
 
     env = {**os.environ, **env_overrides}
+    # Run the gate as if the tenant's virtualenv were activated. helpmate's
+    # Makefile says `python -m eval.run_eval` with a bare interpreter name,
+    # which resolves only inside an activated venv; the others spell out
+    # `.venv/bin/python`. Without this the runner reports "gate failed" for
+    # helpmate when nothing about helpmate is failing -- the first real
+    # incumbent it was pointed at, and it got the diagnosis wrong.
+    #
+    # Prepending to PATH is environment injection, which the zero-touch
+    # contract allows. Editing the tenant's Makefile to spell out an
+    # interpreter is exactly what it forbids.
+    venv_bin = Path(cwd) / ".venv" / "bin"
+    if venv_bin.is_dir():
+        env["PATH"] = f"{venv_bin}{os.pathsep}{env.get('PATH', '')}"
+        env["VIRTUAL_ENV"] = str(venv_bin.parent)
     try:
         proc = subprocess.run(
             shlex.split(policy.gate_command),

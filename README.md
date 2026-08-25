@@ -10,7 +10,7 @@ An OpenAI-compatible AI gateway for the (fictional) Wanmart retail group — 阵
 | shopscout  | zero-touch  | cross-border product selection + shopping agent |
 | wealthwise | zero-touch  | multi-agent financial advisory                |
 | aura       | zero-touch  | on-device AI hardware assistant               |
-| wuwork     | native      | in-repo tenant, arriving in P3                |
+| wuwork     | native      | internal-office assistant; onboarding cost = 57 lines |
 
 A sixth sibling project, `medscope` (chest-X-ray reading), is deliberately **not** integrated: a system whose hard gates are specialist clinical semantics is one the platform should keep its hands off.
 
@@ -42,9 +42,15 @@ attack on G1: unpinning three jury models collapsed a three-lab jury into
 three copies of one model, cut the bill by 91%, and produced no error of any
 kind.
 
-Still to come in Phase 3: running each tenant's own gates through nexus
-(G3), the four gates wired to `exit 2`, the `wuwork` tenant, and the FinOps
-console.
+Phase 3a is in: the `wuwork` tenant, its own offline gate, the G3
+conformance runner and baseline comparison. The runner has been pointed at
+all four incumbent repos — two yield full metric baselines, one yields
+pass/fail only, and one exceeds a conformance-pass time budget. See
+`docs/wuwork.md`; the failures are recorded rather than tidied away.
+
+Still to come in Phase 3b: the four gates wired to `exit 2` with a
+falsification test each, the cross-business-line digest (measured as *reuse*
+cost, separately from onboarding), and the FinOps console.
 
 ## Running tests
 

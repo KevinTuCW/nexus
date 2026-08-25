@@ -75,3 +75,18 @@ def test_unparseable_output_is_flagged_apart_from_failure(policies):
     assert outcome.passed is True
     assert outcome.metrics_unavailable is True
     assert outcome.metrics == {}
+
+
+def test_pretty_printed_json_is_parsed_too(policies):
+    # wealthwise's gate indents its output. The first parser read one line
+    # at a time, so it reported "no metrics" for a tenant that was emitting
+    # perfectly good metrics -- and the baseline comparison would then have
+    # been run against nothing. Found by pointing the runner at the real
+    # repos, not by reading its code.
+    pretty = replace(
+        policies["wuwork"],
+        gate_command='printf \'{\\n  "a": 1,\\n  "b": 2\\n}\\n\'',
+    )
+    outcome = run_tenant_gate(pretty, env_overrides={})
+    assert outcome.metrics_unavailable is False
+    assert outcome.metrics == {"a": 1, "b": 2}
