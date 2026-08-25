@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 import pytest
 
 from nexus.policy.fallback import fallback_chain
 from nexus.policy.routing import choose
-from nexus.registry.tenants import load_policies
+from nexus.registry.tenants import ModelPolicy, TenantPolicy, load_policies
 from nexus.upstream import PRICES
 
 
@@ -15,8 +17,43 @@ def test_wealthwise_gets_no_chain_at_all(policies):
     # allow_fallback: false. In a compliance path a silent downgrade to a
     # weaker model is worse than a loud 503 -- the answer still looks like
     # an answer.
+    #
+    # NOTE: this asserts the behaviour but does not isolate its cause --
+    # wealthwise also pins both its models, so the chain would be empty even
+    # with the allow_fallback rule deleted. See the next test, which is the
+    # one that actually holds that rule up.
     d = choose(policies["wealthwise"], "zai/glm-4.6", PRICES)
     assert fallback_chain(policies["wealthwise"], d, PRICES) == ()
+
+
+def test_forbidding_fallback_is_enforced_on_a_substitutable_model():
+    # The real tenant that forbids fallback happens to pin every model it
+    # uses, so the obvious test above passes for a reason unrelated to its
+    # name: deleting the allow_fallback check entirely leaves it green. That
+    # was found by deliberately breaking the implementation and watching
+    # nothing go red.
+    #
+    # This case cannot be built from policies/*.yaml, because no shipped
+    # tenant combines the two properties. Constructed here instead: fallback
+    # forbidden AND a substitutable model, so an empty chain can only come
+    # from the allow_fallback rule.
+    forbidding = TenantPolicy(
+        tenant="forbids-fallback",
+        integration="native",
+        repo_path=None,
+        gate_command="make test",
+        api_key_env="NEXUS_KEY_UNUSED",
+        allow_fallback=False,
+        budget_nanousd_per_day=1,
+        models={"zai/glm-4.6": ModelPolicy(substitutable_to=("glm",))},
+    )
+    assert fallback_chain(forbidding, choose(forbidding, "zai/glm-4.6", PRICES), PRICES) == ()
+
+    # Control. Flip only allow_fallback and a chain must appear -- otherwise
+    # the assertion above would be satisfied by some third reason and we
+    # would be back where we started.
+    allowing = replace(forbidding, allow_fallback=True)
+    assert fallback_chain(allowing, choose(allowing, "zai/glm-4.6", PRICES), PRICES) != ()
 
 
 def test_a_permissive_tenant_gets_permitted_alternatives(policies):
