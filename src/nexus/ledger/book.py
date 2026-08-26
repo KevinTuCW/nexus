@@ -82,11 +82,21 @@ class Ledger(Protocol):
     to subclass. Both implementations return the same `Entry` type: the row
     shape is defined once, so a field added to it cannot be quietly
     supported by one store and dropped by the other.
+
+    `spent_since` is on the protocol rather than being computed from
+    `entries()` because quota enforcement runs on the request path. Summing
+    a full table per call would make every request pay for the whole history
+    of the platform, and the cost would grow with adoption — the one metric
+    an internal platform cannot afford to have working against it.
+    `db/schema.sql` has carried a `(tenant, ts)` index since P1 for exactly
+    this query; until now nothing asked it.
     """
 
     def record(self, entry: "Entry") -> None: ...
 
     def entries(self) -> list["Entry"]: ...
+
+    def spent_since(self, tenant: str, since: datetime) -> int: ...
 
 
 class InMemoryLedger:
@@ -101,6 +111,13 @@ class InMemoryLedger:
 
     def entries(self) -> list[Entry]:
         return list(self._entries)
+
+    def spent_since(self, tenant: str, since: datetime) -> int:
+        return sum(
+            e.cost_nanousd
+            for e in self._entries
+            if e.tenant == tenant and e.ts >= since
+        )
 
 
 def rollup(entries: list[Entry]) -> dict[str, int]:

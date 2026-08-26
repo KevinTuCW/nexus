@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from nexus.ingress.auth import AuthError, authenticate
+from nexus.ingress.budget import enforce_budget
 from nexus.ledger.book import Entry
 from nexus.ledger.session import meter
 from nexus.obs import span
@@ -57,6 +58,12 @@ async def chat_completions(request: Request, authorization: str = Header(default
         )
 
     policy = state.policies[tenant]
+    # Before routing, not after: the cheapest thing a gateway can do for a
+    # tenant that is out of budget is nothing at all. Checking later would
+    # still refuse, but only after the diversity guard had recorded a routing
+    # decision for a call that was never going to be served.
+    enforce_budget(state.ledger, policy)
+
     decision = choose(policy, model, PRICES)
     try:
         guard(policy, decision)
@@ -73,23 +80,39 @@ async def chat_completions(request: Request, authorization: str = Header(default
     )
 
     group_id = body.get("nexus_diversity_group")
+    if group_id is not None and policy.integration != "native":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "diversity groups require native integration; a zero-touch "
+                "tenant's call structure is not visible to nexus, and "
+                "accepting a group id would imply otherwise"
+            ),
+        )
+
+    attempts = (decision.model, *fallback_chain(policy, decision, PRICES))
     if group_id is not None:
-        if policy.integration != "native":
+        # Filtered, not reserved. The family is spent by `commit()` below,
+        # once a provider has actually answered -- so a fallback can never
+        # walk around the group's diversity, and a failed attempt can never
+        # burn a family the group never used. Both were possible when the
+        # reservation happened here.
+        attempts = tuple(state.groups.candidates(group_id, list(attempts)))
+        if not attempts:
             raise HTTPException(
-                status_code=400,
+                status_code=409,
                 detail=(
-                    "diversity groups require native integration; a zero-touch "
-                    "tenant's call structure is not visible to nexus, and "
-                    "accepting a group id would imply otherwise"
+                    f"group '{group_id}': every permitted model for "
+                    f"'{model}' is in a weight family this group has already "
+                    "used. Refusing rather than repeating a family: a jury "
+                    "with two identical members is not a jury, and nothing "
+                    "downstream would say so."
                 ),
             )
-        candidates = (decision.model, *fallback_chain(policy, decision, PRICES))
-        try:
-            served = state.groups.reserve(group_id, list(candidates))
-        except DiversityExhausted as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         decision = replace(
-            decision, model=served, substituted=served != decision.requested
+            decision,
+            model=attempts[0],
+            substituted=attempts[0] != decision.requested,
         )
         # Re-guarded on purpose. Group selection is itself a substitution,
         # and skipping the guard here would open a G1 bypass along the
@@ -104,7 +127,6 @@ async def chat_completions(request: Request, authorization: str = Header(default
         # dressed up as one.
         guard(policy, decision)
 
-    attempts = (decision.model, *fallback_chain(policy, decision, PRICES))
     last_error: Exception | None = None
     for served_model in attempts:
         call_id = f"call-{uuid.uuid4().hex[:12]}"
@@ -132,6 +154,13 @@ async def chat_completions(request: Request, authorization: str = Header(default
                 )
             ),
         )
+
+    if group_id is not None:
+        # After the call, because a family is spent by delivery and not by
+        # intent. Before the ledger row, because a served call that never
+        # made it into the group's record would let the next member repeat
+        # its family.
+        state.groups.commit(group_id, served_model)
 
     settlement = settlements[0]
     fallback_from = decision.model if served_model != decision.model else None

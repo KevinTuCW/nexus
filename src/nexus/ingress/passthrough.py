@@ -25,6 +25,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from nexus.config import get_settings
 from nexus.ingress.auth import AuthError, authenticate
+from nexus.ingress.budget import enforce_budget
 from nexus.ledger.book import Entry
 from nexus.ledger.usage import Usage, cost_nanousd
 from nexus.registry.families import family_of
@@ -110,6 +111,10 @@ async def embeddings(payload: dict, authorization: str = Header(default="")) -> 
         tenant = authenticate(authorization, state.key_index)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    # Billed, so budgeted. helpmate's corpus ingestion runs through here, and
+    # a budget that covers chat but not ingestion covers the smaller half.
+    enforce_budget(state.ledger, state.policies[tenant])
 
     model = payload.get("model", "")
     price = EMBEDDING_PRICES.get(model)
