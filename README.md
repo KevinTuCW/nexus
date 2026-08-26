@@ -11,7 +11,7 @@
 [![Postgres](https://img.shields.io/badge/Postgres-ledger%20BIGINT-336791.svg?logo=postgresql&logoColor=white)](db/schema.sql)
 [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-fbbf24.svg)](https://langfuse.com/)
 [![CI](https://img.shields.io/badge/CI-offline%20tests-2088FF.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-272%20passed-brightgreen.svg)](#-评测)
+[![tests](https://img.shields.io/badge/tests-310%20passed-brightgreen.svg)](#-评测)
 [![tenant edits](https://img.shields.io/badge/tenant%20repo%20edits-0%20lines-brightgreen.svg)](#-零侵入契约)
 [![gates](https://img.shields.io/badge/gates-G1%E2%80%93G4%20exit%202-brightgreen.svg)](#-评测)
 
@@ -26,7 +26,9 @@
 
 一个 OpenAI 兼容的数据面网关，替万尔玛集团接管五条业务线的模型调用：统一入口、成本归因到每一次调用、路由受租户声明的约束、降级留痕、并在每次交付时**由平台自己举证**「接入没有让任何租户变差」。
 
-**这个仓库最值钱的部分不是那四盏绿灯，是 [🔍 诚实的留白](#-诚实的留白) 和 [⚔️ 一次真实对抗](#️-一次真实对抗g1-拦下的东西长什么样)。** `python -m nexus.eval` 现在是 **exit 0**，四道门全绿。而同一套代码、一行不改，只放开 `policies/shopscout.yaml` 里三个 `pin`，就能让一个跨三家实验室的模型陪审塌成三份同一个模型、账单降 **91%**、**全部 HTTP 200、零报错、没有任何字段记录这件事发生过**——G1 是唯一会为此变红的东西。
+**这个仓库最值钱的部分不是绿灯，是 [🔍 诚实的留白](#-诚实的留白)、[⚔️ 一次真实对抗](#️-一次真实对抗g1-拦下的东西长什么样) 和 [🧭 一次架构复核](#-一次架构复核四件本该有人问的事)。** 同一套代码、一行不改，只放开 `policies/shopscout.yaml` 里三个 `pin`，就能让一个跨三家实验室的模型陪审塌成三份同一个模型、账单降 **91%**、**全部 HTTP 200、零报错、没有任何字段记录这件事发生过**——G1 是唯一会为此变红的东西。
+
+而 `python -m nexus.eval` 报的**不再是四个 passed**。它现在先打印自己拿到了多少证据，再逐门给出三种结论之一：`passed` / `FAILED` / `no evidence`。这个改动来自一次架构复核，抓到的第一件事就是：这条命令过去把空账本喂给三道门，然后打印三次 `passed`——**而这个仓自己的规矩早就写着，一道停跑的门并没有开始通过**。
 
 ## 📑 目录
 
@@ -38,6 +40,7 @@
 - [💬 使用示例](#-使用示例)
 - [📊 评测](#-评测)
 - [⚔️ 一次真实对抗](#️-一次真实对抗g1-拦下的东西长什么样)
+- [🧭 一次架构复核](#-一次架构复核四件本该有人问的事)
 - [💰 接入与复用成本](#-接入与复用成本三个数不能相加)
 - [🔍 诚实的留白](#-诚实的留白)
 - [🔒 安全](#-安全)
@@ -59,7 +62,7 @@
 - 🚦 **每道硬门都有一个能跑的失败演示** —— `--fail-demo g1|g2|g3|g4` 注入那道门存在的理由，然后你亲眼看它变红。四个演示各自**只**触发自己那道门（单独被测）：一个能同时触发三道门的演示，证明不了任何一道门在工作。
 - 🧪 **跑批器把三种结局分开** —— `failed`（跑了说不行）/ `unverifiable`（什么都没跑，**这不是通过**）/ `metrics_unavailable`（跑了但输出格式变了，那是排版不是质量）。合并任意两种都会产出一个会撒谎的跑批器。
 - 🔌 **离线优先** —— 默认上游是确定性假件，真实供应商靠 `UPSTREAM=litellm` 显式打开：**一次 `git clone` 加 `make test` 不该给任何人产生账单**。而控制台顶部因此常驻一条不可折叠的横幅声明当前跑的是不是真上游——对着假上游的控制台和对着真供应商的长得一模一样。
-- 🖥️ **零构建控制台** —— 单文件 HTML，五块面板（成本归因 / 路由与被否决的替换 / 门禁矩阵 / 降级记录 / 配额），全部要鉴权，门禁面板是**三态**：把 `unverifiable` 画成绿灯的控制台比没有控制台更危险。
+- 🖥️ **零构建控制台** —— 单文件 HTML，五块面板（成本归因 / 路由与被否决的替换 / 门禁矩阵 / 降级记录 / 配额），全部**既鉴权又授权**，按调用方的 `cross_tenant_read` 范围裁剪并回一个 `scope` 字段。门禁面板与配额面板都是**三态**：把 `unverifiable` 画成绿灯、或把 `over_budget` 画成 `active` 的控制台，比没有控制台更危险。
 
 ## 🏗️ 架构
 
@@ -78,7 +81,7 @@ helpmate    shopscout   wealthwise   aura(云侧)   wuwork
 │           （只管挑便宜）│  （两者刻意不共用代码）      │
 │                         ▼                            │
 │           fallback 降级链 [G4]（pinned 无处可降）     │
-│           quota 配额（预算 0 = 关停，不是无限）        │
+│           quota 配额 → 超预算 429（预算 0 = 关停）     │
 │              │                                       │
 │              ▼                                       │
 │ ledger    usage 归一化 → meter 会话（finally 结算）   │
@@ -88,7 +91,7 @@ helpmate    shopscout   wealthwise   aura(云侧)   wuwork
 │ assurance isolation 只读校验 / conformance 跑批       │
 │           / baseline 比对 [G3]                        │
 │                                                       │
-│ console   五块面板 + UPSTREAM 横幅                    │
+│ console   五块面板（按 authz 授权范围裁剪）+ 横幅      │
 └──────────────────────────┬───────────────────────────┘
                            ▼
             z.ai(GLM) · SiliconFlow(Qwen3/DeepSeek) · DashScope(Qwen3)
@@ -98,8 +101,8 @@ eval  ──▶  G1 · G2 · G3 · G4  ──▶  任一违规 exit 2
            每道门配一个 --fail-demo
 ```
 
-- **`ingress`**（`ingress/`）—— OpenAI 兼容端点 + 一租户一 key 的鉴权 + **模型别名解析** + 非标端点白名单代理。别名在最外层解析是刻意的：往下所有层只见规范 id，所以权重族判定不会被租户的命名习惯影响。
-- **`policy`**（`policy/`）—— 提议与否决分家。`fallback` 遵守同一条约束：**失败不豁免多样性**，pinned 模型无处可降，链为空而不是「降到一个凑合的」。`quota` 里预算 0 表示**关停**而不是无限，因为默认值最容易被读成后者。
+- **`ingress`**（`ingress/`）—— OpenAI 兼容端点 + 一租户一 key 的鉴权 + **模型别名解析** + 非标端点白名单代理。别名在最外层解析是刻意的：往下所有层只见规范 id，所以权重族判定不会被租户的命名习惯影响。`authz` 是「谁能看见谁」的**唯一定义**，`/v1/usage` 与控制台五块面板都调它——一条有两份实现的授权规则就是两条规则，而生效的永远是松的那条。
+- **`policy`**（`policy/`）—— 提议与否决分家。`fallback` 遵守同一条约束：**失败不豁免多样性**，pinned 模型无处可降，链为空而不是「降到一个凑合的」；但租户**自己点名的那个模型永远在链里**，因为伺服请求的模型不叫替换。`quota` 里预算 0 表示**关停**而不是无限，且它**真的会拦**——一个画着预算却从不执行的面板，比没有预算字段更坏。
 - **`ledger`**（`ledger/`）—— 归一化 → 计量 → 落账 → 对账。只有**叶子调用**计费，父 span 不重复计。`reconcile()` 不是碰巧好用的 helper，**它就是 G2 的定义**，包含「`aborted` 行按下界判」那条规则；重写一遍不会更独立，只会多一份可以自由漂移的拷贝。
 - **`assurance`**（`assurance/`）—— 唯一会去碰租户仓的东西，也因此是全仓最保守的一块：跑批前仓已脏就**拒绝开跑**（分不清是谁改的，事后还原会毁掉别人的工作），跑完还原跟踪文件、**列出但不删**新增的未跟踪文件，还原不回 CLEAN 就返回 `unverifiable`。
 - **`console`**（`console/`）—— 它的存在理由是让 G1 拦下来的东西**被人看见**。路由日志为「被否决的替换」和「正常路由」维护**两条独立队列**，因为否决更早、更稀有，共用一条队列必然被冲掉。
@@ -156,10 +159,11 @@ make install                            # = pip install -e '.[dev]'，离线跑�
 # .venv/bin/pip install -e '.[dev,llm,pg]'
 
 # 2. 跑测试（离线、hermetic、零 key）
-make test                               # 272 passed, 8 skipped
+make test                               # 310 passed, 9 skipped
 
 # 3. 跑四道硬门
-.venv/bin/python -m nexus.eval          # 任一违规 exit 2
+make eval                               # 打印证据条数 + 逐门 passed/FAILED/no evidence
+make eval-delivery                      # 交付用：判空也算失败，不只是违规才算
 .venv/bin/python -m nexus.eval --fail-demo g1   # ……以及它真能红的证明
 
 # 4. 启动网关 + 控制台
@@ -185,7 +189,7 @@ docker compose up --build               # db + nexus，DATABASE_URL 已接线，
 # 或本机 Postgres（与其余五个项目同结构同端口）：
 createdb nexus && psql nexus -f db/schema.sql
 export DATABASE_URL=postgresql://nexus:nexus@localhost:5432/nexus
-make test-live                          # 277 passed, 3 skipped
+make test-live                          # 316 passed, 3 skipped
 ```
 
 镜像在构建时跑自己的整套测试。让测试阶段成为**门**而不是旁支的是最后那一行 `COPY --from=test /build/.tests-passed`——Docker 只构建被依赖的阶段，没有这个 COPY，测试可以整个被跳过而镜像照样打出 tag。**那个标记文件只在 pytest 退出 0 时存在。**
@@ -210,11 +214,20 @@ curl -s localhost:8000/v1/embeddings -H 'Authorization: Bearer dev-helpmate' \
 # 跨租户读用量：默认拒绝，wuwork 是唯一被授权的一个，且拒绝也留痕
 curl -s 'localhost:8000/v1/usage?tenants=helpmate,shopscout' -H 'Authorization: Bearer dev-wuwork'
 
-# 控制台五块面板（全部要鉴权）
+# 控制台五块面板（既鉴权又授权，响应带 scope 说明这一屏覆盖了谁）
 curl -s localhost:8000/console/costs     -H 'Authorization: Bearer dev-wuwork'
 curl -s localhost:8000/console/routing   -H 'Authorization: Bearer dev-wuwork'   # 含被否决的替换
 curl -s localhost:8000/console/gates     -H 'Authorization: Bearer dev-wuwork'   # 三态
 curl -s localhost:8000/console/mode      -H 'Authorization: Bearer dev-wuwork'   # 真上游还是假件
+
+# 同一块面板换一把没有跨租户授权的 key：只回它自己那一份
+curl -s localhost:8000/console/costs      -H 'Authorization: Bearer dev-helpmate'
+# {"by_tenant":{"helpmate":...},"scope":["helpmate"], ...}
+
+# 超出当日预算：429，带 Retry-After，面板同步变 over_budget
+curl -si localhost:8000/v1/chat/completions -H 'Authorization: Bearer dev-helpmate' \
+  -H 'Content-Type: application/json' -d '{"model":"glm-4.7","messages":[]}'
+# HTTP/1.1 429  ... daily budget exceeded: spent ... > budget ... nano-USD
 ```
 
 > 本机若有全局 SOCKS 代理，打 localhost 要加 `--noproxy '*'`，否则会收到一个来自代理的 503，很容易被误读成网关挂了。
@@ -230,18 +243,32 @@ make wuwork-eval
 ## 📊 评测
 
 ```bash
-.venv/bin/python -m nexus.eval                  # 四道门；任一违规 exit 2
+make eval                                       # 四道门；任一违规 exit 2
+make eval-delivery                              # 交付用：判空也 exit 2
 .venv/bin/python -m nexus.eval --fail-demo g2   # 注入 G2 要抓的那种失败
+```
+
+**门先报证据，再报结论。** 三种结论：`passed`（判了，没问题）/ `FAILED`（判了，有问题）/ `no evidence`（**没东西可判，这不是通过**）。第三种是这次架构复核加进来的，理由和 G3 早就写着的那条一模一样：让一道门变绿最便宜的办法，是不再给它任何东西看。
+
+```text
+$ make eval                       # DATABASE_URL 指向网关真正写过的账本
+evidence: 33 ledger row(s), 0 upstream charge(s)   # 一次真实运行的转录
+G1: passed
+G2: no evidence -- no provider charges to reconcile against (--charges-json)
+G3: no evidence -- no conformance run in this invocation
+G4: passed
 ```
 
 | 门 | 它防的那件事 | 判据 | 当前 |
 | --- | --- | --- | --- |
-| **G1** 异质性约束 | 路由优化把租户声明的模型多样性收敛掉 | 请求路径守卫 + **事后账本独立复核**（从租户策略重新推导，不比家族） | ✅ passed |
-| **G2** 归因 0 误差 | 账本与上游实际计费对不上 | `reconcile()`；`aborted` 行按**下界**判 | ✅ passed |
-| **G3** 门禁不劣化 | 接入之后租户自己的指标掉了 | 跑租户门禁 + 与接入前 baseline 比对 | ⚠️ 见下 |
-| **G4** 降级不静默 | 故障切换到弱模型而调用方不知情 | `fallback_from` 做**一致性校验**而非打勾 | ✅ passed |
+| **G1** 异质性约束 | 路由优化把租户声明的模型多样性收敛掉 | 请求路径守卫 + **事后账本独立复核**（从租户策略重新推导，不比家族） | ✅ passed（判的是真账本的行） |
+| **G2** 归因 0 误差 | 账本与上游实际计费对不上 | `reconcile()`；`aborted` 行按**下界**判 | ⚠️ no evidence（无账单信源） |
+| **G3** 门禁不劣化 | 接入之后租户自己的指标掉了 | 跑租户门禁 + 与接入前 baseline 比对 | ⚠️ 两条臂，见下 |
+| **G4** 降级不静默 | 故障切换到弱模型而调用方不知情 | `fallback_from` 做**一致性校验**而非打勾 | ✅ passed（33 行真账本） |
 
-单测：**272 passed, 8 skipped**（离线）／**277 passed, 3 skipped**（接 Postgres）。44 个测试模块、3553 行源码。
+G2 那个 `no evidence` 不是回退，是**把一直存在的空洞标出来**。它需要「上游说自己收了多少」，而 nexus 不接任何供应商的账单 API——网关进程一退出，这半边证据就没了。过去它照样打印 `passed`，因为空账本对空账单永远自洽。
+
+单测：**310 passed, 9 skipped**（离线）／**316 passed, 3 skipped**（接 Postgres）。48 个测试模块、`src/` 3623 行。
 
 ### 一条原则
 
@@ -254,7 +281,7 @@ $ python -m nexus.eval --fail-demo g1
 G1: FAILED (1)
   G1 call demo: tenant 'shopscout' asked for zai/glm-4.6, routing chose
   siliconflow/Qwen/Qwen3-8B (family 'qwen3'), which the policy does not permit
-G2: passed
+G2: no evidence -- no provider charges to reconcile against
 G4: passed
 exit=2
 ```
@@ -305,6 +332,84 @@ shopscout 的合规裁决所依赖的交叉验证在这一刻死了。**而它�
 
 演示后策略文件即刻还原，`git diff policies/` 为空。完整记录见 `docs/integration-shopscout.md`。
 
+## 🧭 一次架构复核：四件本该有人问的事
+
+前面所有的自查都是**纵向**的：一道门是否真能红、一条测试是否为正确的理由绿。这一节记的是一次**横向**复核——按「一个集团 AI 中台的架构师会问什么」通读一遍设计与实现，而不是按「这个模块写得对不对」。四条发现，没有一条能靠读单个模块看出来，因为每个模块单独看都是对的。
+
+**共同形状：控制被写出来了，被测试了，被画进了架构图，却没有被接到任何一条真实路径上。**
+
+### 四道门在判空气
+
+`python -m nexus.eval` 构造 `rows = []`，把空列表交给 G1、G2、G4，然后打印三次 `passed`，exit 0。而 README 把这段输出当作「四道门全绿」的证据引用。
+
+同一时刻，这些门该审的账本正躺在 Postgres 里——`DATABASE_URL` 配着，33 行真实记录，`eval` 一次都没打开过它。
+
+这条自己打自己的力度最大：**G3 早就写着「一道停跑的门并没有开始通过」，而另外三道门每一次调用都在干这件事。** 判据一旦收窄到「空列表没有违规」，它就永远成立——这是最省事、也最难被发现的一种绿。
+
+修法不是「让它去读账本」这么简单，那样只解决一半。真正的修法是**给结论增加第三种取值**：
+
+| 结论 | 含义 |
+| --- | --- |
+| `passed` | 判了，没发现问题 |
+| `FAILED` | 判了，发现问题，exit 2 |
+| `no evidence` | **没东西可判。这不是通过。** |
+
+`make eval-delivery` 会把第三种也算作失败。G2 因此从「永远 passed」变成「诚实地 no evidence」——它需要供应商说自己收了多少，而这个信源本项目不接，这件事[早就写在留白里](#对账不独立)，只是过去被一个 `passed` 盖住了。
+
+### 鉴权当成了授权
+
+`/v1/usage?tenants=wealthwise` 用 helpmate 的 key 打，返回 403，附一段解释「部分授权整体拒绝」的理由。
+
+`/console/costs` 用**同一把 key** 打，返回 200，以及 wealthwise 的全部支出。
+
+```text
+$ curl /v1/usage?tenants=wealthwise -H 'Authorization: Bearer <helpmate>'
+403  tenant 'helpmate' has no cross_tenant_read grant for ['wealthwise']
+
+$ curl /console/costs               -H 'Authorization: Bearer <helpmate>'
+200  {"by_tenant": {"shopscout": 5000, "wealthwise": 317600}, ...}
+```
+
+五块面板全都只做了「你是不是一个租户」这一步。控制台的 docstring 甚至写着「一个不鉴权的面板就是换了个好看字体的跨租户泄漏」——它说对了危害，做错了那一步：**泄漏不需要不鉴权，只需要鉴权之后不授权。**
+
+这条对一个卖「统一之后还守得住边界」的中台是最伤的：边界在被审视的那条路径上是真的，在被使用的那条路径上不存在。修法是把规则收进 `ingress/authz.py` 一处，两个入口都调它；面板按授权范围裁剪，并回一个 `scope` 字段——**因为「少一条业务线」和「那条业务线花了 0」在一张看板上长得一模一样**。
+
+### 预算是个装饰
+
+`check_budget()` 写好了，单测覆盖了，「预算 0 表示关停不是无限」这条语义还专门写进了 docstring 和 README。控制台有一块配额面板，把 `budget_nanousd_per_day` 和已花金额并排画出来。
+
+**没有任何一条请求路径调用过它。** 实测：给 helpmate 灌 30 个请求，花掉 $3.60、超预算 20%，30 个请求**全部 200**，面板照旧显示 `active`。
+
+而这个洞是在「配额被明确排除在四道硬门之外」的掩护下存在的——那个决定本身没错（配额是标准限流，没有 AI 特有的难度），错的是把「不作为硬门」滑成了「不执行」。**一个画着预算却从不执行的面板，比没有预算字段更坏：它教会每个读它的人这个数字是有意义的。**
+
+修法：超预算返回 429 带 `Retry-After`，面板加 `over_budget` 第三态。两个细节是刻意的——
+
+- **入账口径按天，不按进程生命周期。** 面板过去拿全量账本比一个叫「per_day」的字段，第一天两者一致，第三十天它在拿一个月比一天的额度。
+- **不为未发生的调用编一个估价。** 一次调用要花多少，调用前不可知；这里只断言「一次被伺服的调用至少值 1 纳美元」，于是超支上限是**跨过界的那一次调用本身**。代价写出来，而不是用一个编造的估值把它藏掉。
+
+### 降级绕过了分组
+
+原生租户可以带 `nexus_diversity_group` 让网关保证同组成员落在不同权重族。实现是**打电话之前**先占掉一个族，然后再也不回头看。两个方向都会错：
+
+- 占住的模型挂了 → 降级链换一个 → **换到的可能正是别的陪审员已经占着的族**。陪审塌了，而分组账本记着没塌；
+- 反过来，一次**根本没被伺服**的调用照样吃掉一个族，于是这个组会因为它从没用过的模型而提前耗尽。
+
+这是 G1 唯一被允许跳过守卫的那条路径，而它跳过的方式恰好是 G1 的主场景。修法是把「计划」和「结算」分开：`candidates()` 只筛掉别人已占的族，`commit()` 在上游真的答了之后才记账。**族由交付消耗，不由意图消耗。**
+
+顺带修掉的一条边界：同一个成员在自己族内重试（`glm-4.6` 挂了降到 `glm-4.7`）**仍然只占一个座位**，不能被当成两次占用——否则一个租户的整条降级链会被自己的分组规则删光，一次供应商抖动直接变成 503。
+
+### 还有两条小的
+
+- **降级链把租户自己点名的模型排除在外。** 链是从 `substitutable_to` 推的，而一个模型的 `substitutable_to` 通常不含自己的族。于是路由换到便宜货、便宜货挂了，网关回 503——**而租户本来要的那个模型好端端地在那儿**。伺服请求的模型不叫替换，它永远该在链里。
+- **`make test-live` 会清空账本。** pg 测试需要一张空表来断言，拿到空表的办法是 `DELETE FROM ledger_entry`——而 `make test-live` 的 `DATABASE_URL` 直接从 `.env` 读。把它指向任何一个有人在乎的账本，跑一次测试就抹掉了这个平台存在的全部产出，连同 G1/G2/G4 判据的证据。**没有任何警告，测试还是绿的。** 修法是给测试自己一张表，且用 `LIKE ledger_entry INCLUDING ALL` 从真表派生——派生出来的东西不会跟真表漂移，包括那条 `call_id` 唯一索引（正好有一条测试就是测它的）。外加一条「写进去的行不许出现在真表里」的守卫测试。
+- **`GroupLedger` 无界。** `group_id` 由调用方给，`release()` 从没有人调过。路由日志为了不泄漏专门做了有界双队列，而它旁边这个由外部字符串做 key 的 dict 一直在长。改成 LRU 有界，并补一条「淘汰不能吃掉还在进行中的组」的测试——否则就是拿一个内存泄漏换一次静默的多样性失败。
+
+### 这一节想说的
+
+八条「测试为错误的理由通过」是**测试**在骗人。这四条是**架构**在骗人：控制存在、有文档、有单测、画在图上，就是没接到任何真实路径上。前者靠「打断实现看有没有测试变红」能抓；后者只能靠**沿着一条请求从入口走到出口，问每一层「你说的这件事，谁执行？」**——而这个问题在读单个模块时永远不会被提出来，因为每个模块都在正确地做自己那一小步。
+
+> **一个内部平台最典型的失效，不是某个模块写错了，是某条控制从来没有被接线。** 而它的表现是：文档、测试、看板三样齐全，全绿。
+
 ## 💰 接入与复用成本：三个数，不能相加
 
 | | 行数 | 它回答的问题 |
@@ -329,9 +434,11 @@ shopscout 的合规裁决所依赖的交叉验证在这一刻死了。**而它�
 
 契约因此收窄成现在这句，跑批器改成：已脏则拒绝开跑 → 跑完还原跟踪文件、列出但不删未跟踪文件 → 还原不回 CLEAN 就报 `unverifiable`。**一个要求「门必须有被演示过的失败方式」的项目，它的门证伪的第一个东西是它自己的文档。**
 
-### 对账不独立
+### 对账不独立，而且 G2 现在如实报 no evidence
 
 假上游是自己算自己收了多少，所以对账真的是「跟外部比」。换成真供应商后，唯一的数据来源就是响应里的 usage——**拿它对账等于账本跟自己对账**。
+
+更硬的一句：网关进程一退出，这半边证据就彻底没了。所以 `make eval` 对着真账本跑时，G2 报的是 `no evidence` 而不是 `passed`——它需要 `--charges-json` 喂进「上游说自己收了多少」，而这个信源本项目不接。**过去它打印 passed，是因为空账本对空账单永远自洽。**
 
 能保住的部分：`charges()` 从**归一化之前的原始载荷**计价，账本走归一化后计价，两条路径分开，所以归一化 bug（也就是上面那个 cache 语义混淆，最可能出现的真 bug）仍然会被抓住。抓不住的部分：供应商自己报错数。真正独立的信源是供应商的**账单 API**，本项目不接。
 
@@ -352,6 +459,14 @@ shopscout 的合规裁决所依赖的交叉验证在这一刻死了。**而它�
 ### 重排转发但不计费
 
 重排不按 token 定价。把它塞进 token 账本等于**发明一个数字**，而对账随后会确认这个发明——**一个被对账确认过的编造，比一个公开的缺口危险得多**。缺口记在这里。
+
+### 嵌入行没有对账的另一半
+
+`/v1/embeddings` 计费并落账，但转发路径不产出 `UpstreamCharge`。所以一旦 G2 拿到真实账单信源，这些行会被判成 `orphan_entry`——不是账错了，是这条路径的对账证据从来没有被收集。记在这里，等账单 API 那条路线一起做。
+
+### 配额只拦到「跨过界的那一次」
+
+预算检查断言的是「一次被伺服的调用至少值 1 纳美元」，不是对本次调用的估价——调用前不可知的东西不该被编出来。代价：超支上限是跨过界的那一次调用本身，且判定瞬间在途的并发请求都会被放行。这是**已知的、有界的**，不是遗漏。
 
 ### 审计只活到下次重启
 
@@ -384,6 +499,8 @@ shopscout 的合规裁决所依赖的交叉验证在这一刻死了。**而它�
 
 - **一租户一 key，从环境读**（`policies/<tenant>.yaml` 里的 `api_key_env` 指定变量名）。空 key **不建索引**——否则所有未配置的租户会共享同一个空凭据；重复 key **直接拒绝启动**，因为它会让两个租户互相冒充而不报错。
 - **跨租户读用量默认拒绝**。`cross_tenant_read` 是显式白名单，五个租户里只有 `wuwork` 有（集团财务写运营日报），而且**部分授权整体拒绝**：请求里只要有一个未授权目标，整个请求拒绝而不是静默返回子集。**拒绝也要留痕。**
+- **鉴权不等于授权，控制台曾经把这两个字当成一个**。五块面板过去只问「你是不是某个租户」，然后把全集团的成本、路由、降级、预算一起端出来——`/v1/usage` 对同一个 key 回 403 的那一秒，`/console/costs` 正在回 200 和同一批数字。现在两条路径共用 `ingress/authz.py` 一份定义，面板按调用方的授权范围裁剪，并在响应里回一个 `scope` 字段说明「这一屏覆盖了谁」。**一个静默少算一条业务线的看板，和一个显示那条业务线花了 0 的看板，长得一模一样。**
+- **超预算返回 429，不是只在面板上标红**。`budget_nanousd_per_day` 过去从没被任何请求路径读过。
 - **审计不记金额**，只记「谁在什么时候读了谁」。金额本身在账本里，审计表再存一份就是两个可以漂移的真源。
 - **重排不转发租户的 key**：网关用自己的凭据打上游，租户的 key 只用于对网关鉴权。
 - **默认不打真上游**。`UPSTREAM=fake` 是默认值，`make test` 离线且 hermetic，`tests/conftest.py` 在单测期间禁用 `.env`。
@@ -410,23 +527,25 @@ nexus/
 │   ├── audit.py                # 谁读了谁的用量（不记金额）
 │   ├── routing_log.py          # 否决与放行分两条队列，capacity 是每类上限
 │   ├── obs.py                  # Langfuse，可选且非致命
-│   ├── eval.py                 # ★ G1–G4，唯一能让交付失败的入口
+│   ├── eval.py                 # ★ G1–G4；passed / FAILED / no evidence 三态
 │   ├── registry/
 │   │   ├── families.py         # 权重族注册表（G1 判定核心，强制 basis 字段）
 │   │   └── tenants.py          # 租户策略；替换默认拒绝，跨租户读默认为空
 │   ├── policy/
 │   │   ├── routing.py          # 提议：只管挑便宜
-│   │   ├── diversity.py        # 否决：G1 本体，比对模型而非路由自述
+│   │   ├── diversity.py        # 否决：G1 本体；组内族由交付消耗，LRU 有界
 │   │   ├── fallback.py         # G4：失败不豁免多样性，pinned 无处可降
-│   │   └── quota.py            # 预算 0 = 关停，不是无限
+│   │   └── quota.py            # 预算 0 = 关停，不是无限；按 UTC 日窗口
 │   ├── ledger/
 │   │   ├── usage.py            # 两家 cache 语义归一化（收敛测试钉死）
 │   │   ├── session.py          # 结算写在 finally，aborted / failed 分开
-│   │   ├── book.py             # 账本 + reconcile（**G2 的定义**）
+│   │   ├── book.py             # 账本 + reconcile（**G2 的定义**）+ spent_since
 │   │   └── pg.py               # Postgres 实现，BIGINT 往返验证
 │   ├── ingress/
 │   │   ├── api.py              # /v1/chat/completions
 │   │   ├── auth.py             # 一租户一 key；空 key 不建索引，重复 key 拒绝
+│   │   ├── authz.py            # 「谁能看见谁」的唯一定义，usage 与控制台共用
+│   │   ├── budget.py           # 超预算 429 + Retry-After，chat 与 embeddings 共用
 │   │   ├── streaming.py        # 流式计量，走掉的客户端也结算
 │   │   ├── passthrough.py      # /v1/embeddings（计费）· /rerank（转发不计费）
 │   │   └── usage_api.py        # /v1/usage，部分授权整体拒绝
@@ -449,7 +568,7 @@ nexus/
 ├── db/schema.sql               # ledger_entry(BIGINT) + cross_tenant_read_audit
 ├── docs/                       # integration-helpmate / -shopscout / wuwork
 ├── scripts/verify_tenant.py    # 零侵入校验：跑前跑后各验一次租户仓
-├── tests/                      # 45 个文件，272 passed / 8 skipped
+├── tests/                      # 49 个文件，310 passed / 9 skipped
 ├── .github/workflows/ci.yml    # 只跑离线，刻意不跑 live
 ├── Dockerfile                  # 两阶段；COPY --from=test 让测试成为门
 └── docker-compose.yml
@@ -466,6 +585,7 @@ nexus/
 | `UPSTREAM` | `fake` | `fake`（确定性假件）\| `litellm`（**打真供应商**）。默认值是 opt-in 的那一侧：一次 `clone` + `make test` 不该给谁产生账单 |
 | `UPSTREAM_TIMEOUT_S` | `60` | 上游超时。测试断言的是**精确值 60** 而非 `> 0`——后者对一个泄漏进来的值同样绿 |
 | `POLICIES_DIR` | `policies` | 租户策略目录 |
+| `DATABASE_URL`（给 eval） | 空 | `make eval` 从这里找网关真正写过的账本。**空 = 四道门里的 G1/G4 无证据可判，如实报 `no evidence`** |
 | `DATABASE_URL` | 空 | 空 = 内存账本。**pg 测试从 shell 读它，不从 `.env` 读**（conftest 在单测期间禁用 `.env`），用 `make test-live` |
 | `NEXUS_KEY_<TENANT>` | 空 | 一租户一把；变量名由 `policies/<tenant>.yaml` 的 `api_key_env` 指定。空 key 不建索引，重复 key 拒绝启动 |
 | `GLM_API_KEY` / `SILICONFLOW_API_KEY` / `DASHSCOPE_API_KEY` | 空 | 上游凭据，仅 `UPSTREAM=litellm` 时用到 |
@@ -483,7 +603,7 @@ repo_path: ~/ai_projects/shopscout      # 跑批器只读地指向它
 gate_command: make eval                 # G3 要跑的那条命令，来自策略而非硬编码
 api_key_env: NEXUS_KEY_SHOPSCOUT
 allow_fallback: true
-budget_nanousd_per_day: 2000000000      # $2.00/day
+budget_nanousd_per_day: 2000000000      # $2.00/day；超出返回 429，0 表示关停
 models:
   zai/glm-4.6: {}                       # 省略 substitutable_to 即 pin —— 默认拒绝
   siliconflow/Qwen/Qwen3-235B-A22B: {}
@@ -503,8 +623,9 @@ models:
 - [x] **P3c 跨租户复用 + 控制台 + 交付物** —— 授权字段 + 审计 + `/v1/usage`（部分授权整体拒绝）/ 五块面板 + UPSTREAM 横幅 / 两阶段 Dockerfile / compose / CI
 - [x] **零侵入实测** —— helpmate 与 shopscout 两条真实链路打通，**租户仓改动 0 行**；第一次探针四条全挂的记录原样留在 `docs/`
 - [x] **对 G1 的一次真实攻击** —— 放开三个 pin：权重族 3→1、账单降 91%、全部 200、零报错
+- [x] **一次横向架构复核** —— 四条控制被写出来、被测试、画进了架构图，却没接到任何真实路径上：门在判空气 / 控制台鉴权当授权 / 预算是装饰 / 降级绕过多样性分组。全部修掉并各配证伪，见[一次架构复核](#-一次架构复核四件本该有人问的事)
 - [ ] **审计落库** —— 表已建、代码未写。**在此之前审计只活到下次重启**，见[诚实的留白](#审计只活到下次重启)
-- [ ] **对账接供应商账单 API** —— 现在拿供应商自己的响应对账，等于账本跟自己对账。真正独立的信源是账单 API
+- [ ] **对账接供应商账单 API** —— 现在拿供应商自己的响应对账，等于账本跟自己对账。真正独立的信源是账单 API。**在那之前 G2 对着真账本报的是 `no evidence`**，嵌入行的对账证据也一并缺着
 - [ ] **G3 live 臂进 CI** —— 需要凭据与时间预算；直接塞进现有 CI 会得到一个「缺 secret 就红」的流水线，而那种流水线一周内就会被加 `continue-on-error`
 - [ ] **aura 端侧用量** —— 在零侵入契约不变的前提下**无解**：边缘从不经过网关，回填要改租户仓
 - [ ] **重排计费口径** —— 需要一个不是编出来的计价方式；在那之前它转发但不计费
