@@ -46,3 +46,16 @@ def test_vetoes_survive_eviction_pressure():
     for i in range(10):
         log.record("wuwork", f"m{i}", f"m{i}", vetoed=False, reason="")
     assert any(e.vetoed for e in log.events())
+
+
+def test_capacity_is_per_category_not_a_shared_total():
+    # Pins the contract the constructor docstring states. Without this, a
+    # future "tidy-up" that reintroduces a shared cap would pass every other
+    # test in this file -- the eviction test only fills one category.
+    log = RoutingLog(capacity=2)
+    for i in range(5):
+        log.record("wuwork", f"a{i}", f"a{i}", vetoed=False, reason="")
+        log.record("shopscout", f"v{i}", f"v{i}", vetoed=True, reason="veto")
+    events = log.events()
+    assert len([e for e in events if e.vetoed]) == 2
+    assert len([e for e in events if not e.vetoed]) == 2

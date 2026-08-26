@@ -32,6 +32,18 @@ class RoutingEvent:
 
 class RoutingLog:
     def __init__(self, capacity: int = 500) -> None:
+        """`capacity` is per category, not in total.
+
+        Vetoes and accepted routes each keep up to `capacity` events, so
+        `events()` can return up to twice that. Stated because the obvious
+        reading is "the log holds `capacity` events", and a caller sizing
+        this against a memory budget would be out by a factor of two.
+
+        Making it a shared total is what the first version tried, and it
+        reintroduced exactly the bug the two-deque split exists to prevent:
+        a final `[-capacity:]` over the merged list drops the vetoes, which
+        are older and rarer than the accepted routes crowding them out.
+        """
         self._capacity = capacity
         self._accepted: deque[RoutingEvent] = deque(maxlen=capacity)
         self._vetoed: deque[RoutingEvent] = deque(maxlen=capacity)
