@@ -86,3 +86,33 @@ def test_every_requested_tenant_is_asked_for():
     usage = _FakeUsage(_payload())
     build_digest(usage, _FakeClient(), tenants=("helpmate", "shopscout", "aura"))
     assert usage.seen == ("helpmate", "shopscout", "aura")
+
+
+def test_a_business_line_with_no_spend_still_appears(monkeypatch):
+    """A tenant that spent nothing must be a zero, not an absence.
+
+    `/v1/usage` builds `by_tenant` from ledger rows, so a business line with
+    no traffic today is simply missing from the payload — and the digest then
+    printed four lines under a heading that says five. That is the same
+    failure `refused` was introduced to prevent, arriving through the door
+    nobody was watching: a group digest quietly missing a business line is
+    still titled "group", and it still gets taken into a meeting.
+    """
+
+    class Usage:
+        def get_usage(self, tenants):
+            return {"by_tenant": {"helpmate": 500}, "n_rows": 1}
+
+    class Chat:
+        def __init__(self):
+            self.prompt = ""
+
+        def chat(self, messages):
+            self.prompt = messages[-1]["content"]
+            return "ok"
+
+    chat = Chat()
+    d = build_digest(Usage(), chat, ("helpmate", "shopscout"))
+    assert not d.refused
+    assert d.by_tenant["shopscout"] == 0
+    assert "shopscout" in chat.prompt

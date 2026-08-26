@@ -38,7 +38,15 @@ def build_digest(usage_client, chat_client, tenants: tuple[str, ...]) -> Digest:
     except PermissionError:
         return Digest(summary="", by_tenant={}, refused=True)
 
-    by_tenant = payload.get("by_tenant", {})
+    # Every business line asked for appears, including the ones that spent
+    # nothing. `/v1/usage` builds `by_tenant` from ledger rows, so a line with
+    # no traffic today is simply absent from the payload -- and the digest
+    # then printed four bullets under a heading that says five. That is the
+    # failure `refused` exists to prevent, arriving through the door nobody
+    # was watching: silence and zero are not the same fact, and only one of
+    # them is worth reporting to a group meeting as "no spend".
+    by_tenant = {name: 0 for name in tenants}
+    by_tenant.update(payload.get("by_tenant", {}))
     lines = "\n".join(
         f"- {name}: {format_usd(cost)}" for name, cost in sorted(by_tenant.items())
     )
