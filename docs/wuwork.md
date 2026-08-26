@@ -12,8 +12,8 @@ number somebody can argue with.
 | internal policy Q&A | short | high | routing, per-tenant attribution |
 | meeting minutes + action items | long | low | the other half of the cost curve |
 
-A third capability — a cross-business-line operations digest — belongs to
-Phase 3b and is measured separately. It depends on other tenants, so folding
+A third capability — a cross-business-line operations digest — landed in
+Phase 3c and is measured separately. It depends on other tenants, so folding
 it into the onboarding figure would destroy the meaning of both numbers.
 
 ## The rule that makes the number mean anything
@@ -31,14 +31,22 @@ one and watching it go red.
 
 | what | lines |
 |---|---|
-| **integration surface** (`client.py` + `config.py`) | **57** |
-| all wuwork Python (adds retrieval, Q&A, minutes, gate) | 388 |
+| **integration surface** (`client.py` + `config.py`, onboarding parts only) | **57** |
+| all wuwork Python (adds retrieval, Q&A, minutes, gate, digest) | 443 |
 | corpus, transcripts and golden set | 168 (not counted) |
 
 **57 lines** is the honest answer to "what does it take to reach the
 gateway": an HTTP client, a settings object, and a refusal to start without
 a credential. Everything else is the business the tenant is in, and would
 have been written whatever it talked to.
+
+**A caveat about recounting.** `wc -l client.py config.py` gives 76 today,
+not 57. `client.py` later grew a `get_usage` method, which is *reuse* work
+and is counted under reuse cost below — counting it twice would inflate
+onboarding by the price of a capability no new tenant has to build. The
+figure names the onboarding parts of those files, not the files. A number
+that still points at something it no longer equals is how documentation
+starts lying without anybody editing it.
 
 The corpus and golden set are excluded deliberately. They are content, not
 integration — a team onboarding a real business line brings their own.
