@@ -32,7 +32,7 @@ one and watching it go red.
 | what | lines |
 |---|---|
 | **integration surface** (`client.py` + `config.py`, onboarding parts only) | **57** |
-| all wuwork Python (adds retrieval, Q&A, minutes, gate, digest) | 443 |
+| all wuwork Python (adds retrieval, Q&A, minutes, gate, digest) | 462 |
 | corpus, transcripts and golden set | 168 (not counted) |
 
 **57 lines** is the honest answer to "what does it take to reach the
