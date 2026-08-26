@@ -20,6 +20,7 @@ from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
 from nexus.policy.diversity import GroupLedger
 from nexus.registry.tenants import TenantPolicy, load_policies
+from nexus.routing_log import RoutingLog
 from nexus.upstream import FakeUpstream, Upstream
 
 
@@ -32,6 +33,7 @@ class State:
     #: Per-group weight-family reservations, for native tenants only.
     groups: GroupLedger
     audit: InMemoryAudit
+    routing: RoutingLog
 
 
 @lru_cache(maxsize=1)
@@ -81,4 +83,5 @@ def get_state() -> State:
         upstream=upstream,
         groups=GroupLedger(),
         audit=InMemoryAudit(),
+        routing=RoutingLog(),
     )

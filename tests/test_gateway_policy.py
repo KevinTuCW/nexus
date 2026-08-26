@@ -79,3 +79,24 @@ def test_ledger_still_reconciles_after_a_fallback(client):
     # The failed first attempt produced no upstream charge and no billed
     # row; the successful second attempt produced exactly one of each.
     assert reconcile(state.ledger.entries(), state.upstream.charges()) == []
+
+
+def test_a_vetoed_route_reaches_the_routing_log(client, monkeypatch):
+    # The unit tests prove RoutingLog stores what it is given. This proves
+    # the handler actually gives it the veto -- the half that would silently
+    # go missing if someone moved the recording below the raise.
+    import nexus.ingress.api as api
+    from nexus.policy.routing import RouteDecision
+
+    def _greedy(policy, requested, prices):
+        return RouteDecision(
+            requested=requested, model="siliconflow/Qwen/Qwen3-8B",
+            substituted=True, reason="greedy",
+        )
+
+    monkeypatch.setattr(api, "choose", _greedy)
+    r = _post(client, "sk-shopscout")
+    assert r.status_code == 500
+    vetoed = [e for e in get_state().routing.events() if e.vetoed]
+    assert vetoed, "the veto never reached the log"
+    assert vetoed[0].tenant == "shopscout"

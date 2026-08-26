@@ -64,7 +64,13 @@ async def chat_completions(request: Request, authorization: str = Header(default
         # The router proposed something the tenant pinned. Refusing the
         # request is the honest outcome: serving the requested model anyway
         # would hide a routing bug behind a correct-looking answer.
+        state.routing.record(
+            tenant, decision.requested, decision.model, vetoed=True, reason=str(exc)
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    state.routing.record(
+        tenant, decision.requested, decision.model, vetoed=False, reason=decision.reason
+    )
 
     group_id = body.get("nexus_diversity_group")
     if group_id is not None:
