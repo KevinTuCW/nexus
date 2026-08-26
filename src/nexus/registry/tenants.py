@@ -36,6 +36,11 @@ class TenantPolicy:
     api_key_env: str
     allow_fallback: bool
     budget_nanousd_per_day: int
+    #: Tenants whose usage this tenant may read. Empty by default, and the
+    #: default is the point: "reuse" as a platform selling point must not
+    #: rest on a boundary crossing nobody signed off. The first genuine
+    #: reuse request is also the first request to leave its own tenant.
+    cross_tenant_read: tuple[str, ...] = ()
     models: dict[str, ModelPolicy] = field(default_factory=dict)
 
 
@@ -59,6 +64,7 @@ def load_policies(policies_dir: Path) -> dict[str, TenantPolicy]:
             api_key_env=raw["api_key_env"],
             allow_fallback=bool(raw["allow_fallback"]),
             budget_nanousd_per_day=int(raw["budget_nanousd_per_day"]),
+            cross_tenant_read=tuple(raw.get("cross_tenant_read", ())),
             models=models,
         )
         if policy.tenant != path.stem:

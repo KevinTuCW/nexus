@@ -38,3 +38,15 @@ CREATE TABLE IF NOT EXISTS ledger_entry (
 CREATE INDEX IF NOT EXISTS ledger_entry_tenant_ts ON ledger_entry (tenant, ts);
 CREATE INDEX IF NOT EXISTS ledger_entry_trace ON ledger_entry (trace_root);
 CREATE UNIQUE INDEX IF NOT EXISTS ledger_entry_call ON ledger_entry (call_id);
+
+-- Who read whose usage. No amounts: see src/nexus/audit.py for why.
+CREATE TABLE IF NOT EXISTS cross_tenant_read_audit (
+    id       BIGSERIAL PRIMARY KEY,
+    caller   TEXT NOT NULL,
+    targets  TEXT[] NOT NULL,
+    denied   BOOLEAN NOT NULL DEFAULT FALSE,
+    ts       TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS cross_tenant_read_audit_caller_ts
+    ON cross_tenant_read_audit (caller, ts);

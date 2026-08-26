@@ -57,3 +57,19 @@ def test_zero_touch_tenants_declare_a_repo_path(policies_dir):
     # checkout to keep untouched.
     assert reg["wuwork"].integration == "native"
     assert reg["wuwork"].repo_path is None
+
+
+def test_cross_tenant_read_defaults_to_nothing(policies_dir):
+    # Default deny. A platform whose "reuse" story depends on every tenant
+    # being able to read every other tenant has not built reuse, it has
+    # removed isolation and renamed the result.
+    reg = load_policies(policies_dir)
+    for name in ("helpmate", "shopscout", "wealthwise", "aura"):
+        assert reg[name].cross_tenant_read == ()
+
+
+def test_wuwork_is_the_one_authorised_crossing(policies_dir):
+    reg = load_policies(policies_dir)
+    assert set(reg["wuwork"].cross_tenant_read) == {
+        "helpmate", "shopscout", "wealthwise", "aura"
+    }

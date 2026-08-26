@@ -5,6 +5,10 @@ gate_command: make wuwork-eval
 api_key_env: NEXUS_KEY_WUWORK
 allow_fallback: true
 budget_nanousd_per_day: 1000000000
+# The group finance function reads every business line's AI spend to write
+# the daily operations digest. This is the one authorised boundary crossing
+# in the system, and it is written down rather than assumed.
+cross_tenant_read: [helpmate, shopscout, wealthwise, aura]
 models:
   siliconflow/Qwen/Qwen3-8B:
     substitutable_to: [qwen3]
