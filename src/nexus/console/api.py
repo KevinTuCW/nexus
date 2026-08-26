@@ -13,6 +13,7 @@ something else.
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import FileResponse
 
 from nexus.ingress.auth import AuthError, authenticate
 from nexus.ledger.book import rollup
@@ -125,3 +126,28 @@ def quota(authorization: str = Header(default="")) -> dict:
             }
         )
     return {"tenants": rows, "currency_unit": "nanousd"}
+
+
+@router.get("/console/mode")
+def mode(authorization: str = Header(default="")) -> dict:
+    """Which upstream this gateway is actually talking to.
+
+    A console pointed at the fake upstream looks exactly like one pointed at
+    real providers: same panels, same numbers, same confident totals. The
+    banner this feeds exists so nobody reads a demo as production.
+    """
+    from nexus.config import get_settings
+
+    _require_auth(authorization)
+    return {"upstream": get_settings().upstream}
+
+
+@router.get("/console")
+def console_page() -> FileResponse:
+    """The page shell, unauthenticated; every panel it fetches is not.
+
+    Keeping auth on the data endpoints rather than the shell puts the whole
+    access-control story in one place. A page that renders nothing without a
+    key is not a leak.
+    """
+    return FileResponse(Path(__file__).resolve().parent / "static" / "console.html")

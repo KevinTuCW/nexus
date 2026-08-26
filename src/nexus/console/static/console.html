@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nexus · FinOps</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#c9d1d9;
+          --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --none:#6e7681; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.6 ui-monospace,monospace;
+         margin:0; padding:24px; }
+  h2 { font-size:13px; letter-spacing:1px; color:var(--dim); margin:24px 0 8px; }
+  .banner { padding:10px 14px; border:1px solid var(--line); border-radius:4px;
+            margin-bottom:18px; }
+  .banner.fake { border-color:var(--bad); color:var(--bad); }
+  table { border-collapse:collapse; width:100%; }
+  td,th { border-bottom:1px solid var(--line); padding:6px 10px; text-align:left; }
+  th { color:var(--dim); font-weight:400; }
+  .pass{color:var(--ok)} .regressed{color:var(--bad)} .not_covered{color:var(--none)}
+  .veto { color:var(--bad); font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
+          padding:12px 18px 20px; }
+  .unit { color:var(--dim); font-size:12px; }
+</style>
+<div id="banner" class="banner">loading…</div>
+<div class="card">
+  <h2>COST ATTRIBUTION <span class="unit">nano-USD</span></h2><table id="costs"></table>
+  <h2>ROUTING · vetoes first</h2><table id="routing"></table>
+  <h2>GATE MATRIX</h2><table id="gates"></table>
+  <h2>FALLBACKS</h2><table id="fallbacks"></table>
+  <h2>QUOTA <span class="unit">nano-USD</span></h2><table id="quota"></table>
+</div>
+<script>
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const H = { Authorization: "Bearer " + KEY };
+// Six decimals, because one token of a $0.60/1M model costs 0.0000006 USD.
+// Rounding to cents here would render every honest figure as 0.00.
+const usd = n => "$" + (n / 1e9).toFixed(6);
+const get = p => fetch(p, { headers: H }).then(r => r.json());
+
+function table(el, cols, rows) {
+  el.innerHTML = "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+}
+
+get("/console/mode").then(m => {
+  const b = document.getElementById("banner");
+  b.textContent = "UPSTREAM = " + m.upstream +
+    (m.upstream === "fake"
+      ? "  ·  这些数字来自假上游，不是真实支出"
+      : "  ·  reaching real providers");
+  if (m.upstream === "fake") b.classList.add("fake");
+});
+
+get("/console/costs").then(d => table(
+  document.getElementById("costs"),
+  [["tenant", r => r[0]], ["spend", r => usd(r[1])]],
+  Object.entries(d.by_tenant)));
+
+get("/console/routing").then(d => {
+  // Vetoes first. They are the only reason to open this panel; accepted
+  // routes are constant and dull, and a veto buried among them is a veto
+  // nobody sees.
+  const ev = d.events.slice().sort((a, b) => (b.vetoed - a.vetoed));
+  table(document.getElementById("routing"),
+    [["", r => r.vetoed ? "<span class='veto'>VETO</span>" : ""],
+     ["tenant", r => r.tenant], ["requested", r => r.requested],
+     ["routed", r => r.routed], ["reason", r => r.reason]], ev);
+});
+
+get("/console/gates").then(d => table(
+  document.getElementById("gates"),
+  [["tenant", r => r.tenant], ["command", r => r.gate_command],
+   ["state", r => `<span class="${r.state}" title="${
+      r.state === "not_covered" ? "没有 baseline —— 这不是通过，是没人检查过" : ""
+    }">${r.state}</span>`]],
+  d.tenants));
+
+get("/console/fallbacks").then(d => table(
+  document.getElementById("fallbacks"),
+  [["call", r => r.call_id], ["tenant", r => r.tenant],
+   ["from", r => r.from], ["to", r => r.to]], d.events));
+
+get("/console/quota").then(d => table(
+  document.getElementById("quota"),
+  [["tenant", r => r.tenant], ["budget", r => usd(r.budget_nanousd_per_day)],
+   ["spent", r => usd(r.spent_nanousd)], ["state", r => r.state]], d.tenants));
+</script>
