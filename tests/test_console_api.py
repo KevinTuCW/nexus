@@ -58,10 +58,25 @@ def test_gates_panel_marks_tenants_with_a_baseline_differently(client):
 
 
 def test_quota_panel_calls_zero_budget_switched_off(client):
+    # Injects a zero-budget tenant, because none of the shipped policies has
+    # one. The first version of this test guarded its assertion with
+    # `if row["budget_nanousd_per_day"] == 0`, so the loop body never ran and
+    # the test passed no matter what the panel said -- deleting the
+    # `switched_off` branch entirely left the suite green. Found by trying it.
+    from dataclasses import replace
+
+    state = get_state()
+    state.policies["switched-off-tenant"] = replace(
+        state.policies["wuwork"],
+        tenant="switched-off-tenant",
+        budget_nanousd_per_day=0,
+    )
     body = client.get("/console/quota", headers=H).json()
-    for row in body["tenants"]:
-        if row["budget_nanousd_per_day"] == 0:
-            assert row["state"] == "switched_off"
+    by_tenant = {row["tenant"]: row for row in body["tenants"]}
+    assert by_tenant["switched-off-tenant"]["state"] == "switched_off"
+    # And a funded tenant is not swept into the same bucket -- an assertion
+    # that only ever sees one case cannot tell a rule from a constant.
+    assert by_tenant["wuwork"]["state"] == "active"
 
 
 def test_costs_panel_declares_its_unit(client):
