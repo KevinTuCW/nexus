@@ -14,6 +14,7 @@ structurally, so the cycle cannot come back quietly.
 from dataclasses import dataclass
 from functools import lru_cache
 
+from nexus.audit import InMemoryAudit
 from nexus.config import get_settings
 from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
@@ -30,6 +31,7 @@ class State:
     upstream: Upstream
     #: Per-group weight-family reservations, for native tenants only.
     groups: GroupLedger
+    audit: InMemoryAudit
 
 
 @lru_cache(maxsize=1)
@@ -78,4 +80,5 @@ def get_state() -> State:
         ledger=ledger,
         upstream=upstream,
         groups=GroupLedger(),
+        audit=InMemoryAudit(),
     )
