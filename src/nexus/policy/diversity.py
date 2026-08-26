@@ -27,6 +27,8 @@ and a gate that is right most of the time is not a gate:
     run out.
 """
 
+from collections import OrderedDict
+
 from nexus.policy.routing import RouteDecision
 from nexus.registry.families import UNKNOWN_FAMILY, family_of
 from nexus.registry.tenants import TenantPolicy, substitution_allowed
@@ -65,34 +67,106 @@ def guard(policy: TenantPolicy, decision: RouteDecision) -> None:
 
 
 class GroupLedger:
-    """Per-group family reservations for native tenants."""
+    """Per-group family reservations for native tenants.
 
-    def __init__(self) -> None:
-        self._used: dict[str, set[str]] = {}
+    **A family is spent when a call succeeds, not when one is planned.** The
+    first version reserved before the provider was called and never looked
+    again, which produced two failures in opposite directions:
+
+      - the reserved model failed, the fallback chain served something else,
+        and nothing re-checked the family. A group could end up with two
+        members on one weight family while this ledger recorded that it had
+        not — the exact collapse G1 exists to catch, arriving through the
+        one path that was allowed to skip it;
+      - a family was consumed by a call that never happened, so a group could
+        run out of families on models it had never used and fail a juror
+        that had every right to be served.
+
+    Hence `candidates()` (what is still available) and `commit()` (what was
+    actually served). Planning is free; only delivery costs a family.
+
+    Bounded, for the same reason `RoutingLog` is. `group_id` arrives from the
+    caller, `release()` was never invoked by anyone, and an unbounded dict
+    keyed by a caller-supplied string is a leak that reads like a feature
+    until the process is old enough to matter. Eviction is least-recently-
+    used: a group still being filled in must outlive unrelated traffic, or
+    the bound would have traded a memory leak for a silent diversity failure.
+    """
+
+    #: Enough for the deepest jury any tenant runs, times a wide margin for
+    #: groups still in flight. Sized rather than unbounded — see class doc.
+    DEFAULT_CAPACITY = 1024
+
+    def __init__(self, capacity: int = DEFAULT_CAPACITY) -> None:
+        self._capacity = capacity
+        self._used: OrderedDict[str, set[str]] = OrderedDict()
+
+    def _touch(self, group_id: str) -> set[str]:
+        if group_id in self._used:
+            self._used.move_to_end(group_id)
+        else:
+            self._used[group_id] = set()
+            while len(self._used) > self._capacity:
+                self._used.popitem(last=False)
+        return self._used[group_id]
+
+    def candidates(self, group_id: str, candidates: list[str]) -> list[str]:
+        """The subset of `candidates` whose families this group has not used.
+
+        Order is preserved: the caller's preference (cheapest first, from the
+        fallback chain) still decides, this only removes what diversity
+        forbids. Unregistered models are dropped rather than allowed through
+        — counting an unknown family towards diversity would let a stale
+        registry satisfy the requirement by accident.
+
+        Candidates sharing a family with *each other* are all kept. The
+        diversity rule is about group members, not about one member's retry
+        chain: a juror that falls back from `glm-4.6` to `glm-4.7` still
+        occupies exactly one seat and one family. De-duplicating here instead
+        would delete a tenant's entire fallback chain — `substitutable_to:
+        [glm]` permits precisely the same-family alternatives — and turn a
+        single provider blip into a 503 for a request that had somewhere to
+        go.
+        """
+        used = self._touch(group_id)
+        return [
+            model
+            for model in candidates
+            if family_of(model) != UNKNOWN_FAMILY and family_of(model) not in used
+        ]
+
+    def commit(self, group_id: str, model: str) -> None:
+        """Record that `model` was served to this group. Idempotent."""
+        family = family_of(model)
+        if family == UNKNOWN_FAMILY:
+            raise DiversityExhausted(
+                f"group '{group_id}' was served '{model}', which is not in the "
+                "weight-family registry; it cannot be counted towards "
+                "diversity and must not be silently accepted"
+            )
+        self._touch(group_id).add(family)
 
     def reserve(self, group_id: str, candidates: list[str]) -> str:
         """Take the first candidate whose family is unused in this group.
 
-        Raises rather than returning a duplicate. Silently repeating a
-        family is the failure this class exists to prevent, and it is
-        invisible downstream — same as aura's rule that a guarantee which
-        cannot be met must fail loudly instead of degrading quietly.
+        Plan-and-commit in one step. Kept for callers that genuinely cannot
+        fail between the two — and raising rather than returning a duplicate,
+        because silently repeating a family is the failure this class exists
+        to prevent and it is invisible downstream.
         """
-        used = self._used.setdefault(group_id, set())
-        for model in candidates:
-            family = family_of(model)
-            if family == UNKNOWN_FAMILY:
-                # An unregistered model cannot be counted towards diversity:
-                # accepting it would let a stale registry satisfy the
-                # requirement by accident.
-                continue
-            if family not in used:
-                used.add(family)
-                return model
-        raise DiversityExhausted(
-            f"group '{group_id}' has already used families {sorted(used)}; "
-            f"none of {candidates} contributes a new known family"
-        )
+        available = self.candidates(group_id, candidates)
+        if not available:
+            raise DiversityExhausted(
+                f"group '{group_id}' has already used families "
+                f"{sorted(self._used.get(group_id, set()))}; none of "
+                f"{candidates} contributes a new known family"
+            )
+        self.commit(group_id, available[0])
+        return available[0]
+
+    def tracked_groups(self) -> int:
+        """How many groups are currently held. Exposed so the bound is testable."""
+        return len(self._used)
 
     def release(self, group_id: str) -> None:
         self._used.pop(group_id, None)
