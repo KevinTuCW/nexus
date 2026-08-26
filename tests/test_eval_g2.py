@@ -90,5 +90,10 @@ def test_fail_demo_g2_does_not_trip_the_other_gates():
         env={"PYTHONPATH": f"{ROOT}/src:{ROOT}", "PATH": "/usr/bin:/bin"},
     )
     combined = proc.stdout + proc.stderr
-    assert "G1: passed" in combined
-    assert "G4: passed" in combined
+    # Asserted as "did not fire", not as "passed". A demo that supplies only
+    # a provider charge gives G1 and G4 no rows, and reporting that absence
+    # as a pass is the defect `no evidence` was introduced to remove -- so
+    # the old form of this assertion would now be pinning it back in.
+    assert "G1: FAILED" not in combined
+    assert "G4: FAILED" not in combined
+    assert "G2: FAILED" in combined

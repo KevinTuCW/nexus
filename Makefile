@@ -14,6 +14,18 @@ test:
 test-live:
 	set -a; . ./.env; set +a; $(PY) -m pytest -q
 
+# The four gates. Reads the ledger the gateway wrote (DATABASE_URL) or rows
+# handed to it with --ledger-json; a gate with nothing to judge reports
+# `no evidence`, which is not a pass.
+eval:
+	$(PY) -m nexus.eval
+
+# What a delivery runs. The difference is the only one that matters: here a
+# gate that judged nothing fails the build instead of printing a caveat
+# nobody reads.
+eval-delivery:
+	$(PY) -m nexus.eval --require-evidence
+
 wuwork-eval:
 	$(PY) -m tenants.wuwork.eval
 

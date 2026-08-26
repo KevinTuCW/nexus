@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nexus.assurance.baseline import compare
+from nexus.config import get_settings
 from nexus.ledger.book import Entry, UpstreamCharge, reconcile
 from nexus.ledger.usage import Usage
 from nexus.registry.families import family_of
@@ -225,6 +226,103 @@ def _demo_g3_baselines_dir() -> str:
     return tmp_dir
 
 
+def load_ledger_rows(ledger_json: str | None) -> list[Entry]:
+    """The rows G1 and G4 will judge.
+
+    `--ledger-json` wins when given; otherwise the persisted ledger is used
+    if `DATABASE_URL` points at one. An in-memory ledger is not consulted,
+    because there is nothing in it: it died with the gateway process that
+    wrote it, and this command is a different one.
+
+    This function is the fix for the defect that mattered most in this
+    repository. `main()` used to build `rows = []`, hand the empty list to
+    three gates, and print `passed` three times -- while the rows those gates
+    exist to audit sat in Postgres, unread. Every rule here says that is not
+    a pass. G3 already refuses to call a tenant green because it stopped
+    producing a number; the other three were doing precisely that, on every
+    invocation, and the README quoted the output as proof of four green
+    gates.
+    """
+    if ledger_json:
+        raw = json.loads(Path(ledger_json).read_text(encoding="utf-8"))
+        return [_entry_from_dict(r) for r in raw]
+
+    # Through Settings, not `os.environ`. The gateway resolves DATABASE_URL
+    # via pydantic-settings, which also reads `.env`; reading the raw
+    # environment here would have the eval and the gateway disagree about
+    # which ledger exists -- and the eval would report "no evidence" over a
+    # database that was sitting right there, full of the rows it was asked
+    # to audit. Found by running it.
+    dsn = get_settings().database_url.strip()
+    if not dsn:
+        return []
+    from nexus.ledger.pg import PgLedger
+
+    return PgLedger(dsn).entries()
+
+
+def _entry_from_dict(raw: dict) -> Entry:
+    """Rehydrate one ledger row from JSON.
+
+    Kept alongside the loader rather than on `Entry` itself: this is an
+    evidence-import format for the gates, not a second serialisation of the
+    row shape that the gateway or the database would ever write.
+    """
+    ts = raw["ts"]
+    return Entry(
+        entry_id=raw["entry_id"],
+        call_id=raw["call_id"],
+        tenant=raw["tenant"],
+        workload=raw["workload"],
+        trace_root=raw.get("trace_root"),
+        span_id=raw["span_id"],
+        parent_span_id=raw.get("parent_span_id"),
+        model=raw["model"],
+        family=raw["family"],
+        usage=Usage(
+            prompt_tokens=raw.get("prompt_tokens", 0),
+            completion_tokens=raw.get("completion_tokens", 0),
+            cache_write_tokens=raw.get("cache_write_tokens", 0),
+            cache_read_tokens=raw.get("cache_read_tokens", 0),
+        ),
+        cost_nanousd=raw["cost_nanousd"],
+        status=raw["status"],
+        ts=datetime.fromisoformat(ts) if isinstance(ts, str) else ts,
+        fallback_from=raw.get("fallback_from"),
+        requested_model=raw.get("requested_model"),
+        routed_model=raw.get("routed_model"),
+    )
+
+
+def load_charges(charges_json: str | None) -> list[UpstreamCharge]:
+    """What the providers said they charged. G2's other side.
+
+    There is no default source, and that absence is the honest state of the
+    project: nexus does not integrate any provider's billing API, so once the
+    gateway process that made the calls has exited, nothing here knows what
+    was charged. Supplying an empty list and letting `reconcile` run would
+    turn "we do not know what the provider charged" into "the provider
+    charged nothing", and every row in the ledger would be reported as an
+    orphan -- a red gate that means the opposite of what it says.
+    """
+    if not charges_json:
+        return []
+    raw = json.loads(Path(charges_json).read_text(encoding="utf-8"))
+    return [
+        UpstreamCharge(
+            call_id=c["call_id"], model=c["model"], cost_nanousd=c["cost_nanousd"]
+        )
+        for c in raw
+    ]
+
+
+#: A gate's verdict. `NO_EVIDENCE` is a first-class third outcome, not a
+#: flavour of pass: a gate that judged nothing has not judged anything, and
+#: the single cheapest way to make any gate in this file green is to stop
+#: feeding it.
+PASSED, FAILED, NO_EVIDENCE = "passed", "FAILED", "no evidence"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -232,12 +330,24 @@ def main() -> int:
         choices=["g1", "g2", "g3", "g4"],
         help="inject the failure this gate is meant to catch, and prove it fires",
     )
+    ap.add_argument(
+        "--ledger-json",
+        help="ledger rows for G1/G4 to judge; defaults to DATABASE_URL if set",
+    )
+    ap.add_argument(
+        "--charges-json",
+        help="what the providers charged, for G2 to reconcile the ledger against",
+    )
+    ap.add_argument(
+        "--require-evidence",
+        action="store_true",
+        help="exit 2 when a gate had nothing to judge, not only when one fails",
+    )
     args = ap.parse_args()
 
     rows: list[Entry] = []
     charges: list[UpstreamCharge] = []
     current: dict[str, dict] = {}
-    BASELINES_DIR = Path(__file__).resolve().parents[2] / "baselines"
     conformance_ran = False
     demo_baselines_dir = None
 
@@ -259,35 +369,85 @@ def main() -> int:
         charges.append(
             UpstreamCharge(call_id=row.call_id, model=row.model, cost_nanousd=row.cost_nanousd)
         )
+    else:
+        rows = load_ledger_rows(args.ledger_json)
+        charges = load_charges(args.charges_json)
 
     policies = load_policies(Path(__file__).resolve().parents[2] / "policies")
 
-    results = {
-        "G1": check_g1_diversity_is_never_collapsed(rows, policies),
-        "G2": check_g2_attribution_error_is_zero(rows, charges),
-        "G4": check_g4_fallback_is_never_silent(rows),
-    }
-    if conformance_ran:
-        results["G3"] = check_g3_tenant_gates_have_not_regressed(
+    print(
+        f"evidence: {len(rows)} ledger row(s), {len(charges)} upstream charge(s)"
+        + (
+            ""
+            if rows or charges
+            else " -- nothing to judge. Point --ledger-json at exported rows, "
+            "or set DATABASE_URL to the ledger the gateway writes."
+        ),
+        file=sys.stderr,
+    )
+
+    # (verdict, violations). A gate with no evidence never reaches its check
+    # function: running a check over an empty list and reporting the empty
+    # result as a pass is the whole defect this structure exists to remove.
+    results: dict[str, tuple[str, list[str]]] = {}
+    results["G1"] = _judge(
+        bool(rows), lambda: check_g1_diversity_is_never_collapsed(rows, policies)
+    )
+    results["G2"] = _judge(
+        bool(charges), lambda: check_g2_attribution_error_is_zero(rows, charges)
+    )
+    results["G4"] = _judge(bool(rows), lambda: check_g4_fallback_is_never_silent(rows))
+    results["G3"] = _judge(
+        conformance_ran,
+        lambda: check_g3_tenant_gates_have_not_regressed(
             current, Path(demo_baselines_dir)
-        )
+        ),
+    )
+    if demo_baselines_dir:
         shutil.rmtree(demo_baselines_dir, ignore_errors=True)
-    else:
-        # No conformance run happened in this invocation, so G3 has no
-        # evidence to judge -- that is neither a pass nor a failure, and
-        # the report says so rather than defaulting to either.
-        print("G3: no conformance run in this invocation", file=sys.stderr)
 
     failed = False
-    for name, violations in results.items():
-        if violations:
+    starved = False
+    for name in ("G1", "G2", "G3", "G4"):
+        verdict, violations = results[name]
+        if verdict == FAILED:
             failed = True
             print(f"{name}: FAILED ({len(violations)})", file=sys.stderr)
             for v in violations:
                 print(f"  {v}", file=sys.stderr)
+        elif verdict == NO_EVIDENCE:
+            starved = True
+            print(f"{name}: no evidence -- {_STARVED_WHY[name]}", file=sys.stderr)
         else:
             print(f"{name}: passed", file=sys.stderr)
-    return 2 if failed else 0
+
+    if starved and not args.require_evidence:
+        print(
+            "\nSome gates judged nothing. That is not a pass; it is an "
+            "unanswered question. Run with --require-evidence to make it "
+            "fail the delivery.",
+            file=sys.stderr,
+        )
+    return 2 if failed or (starved and args.require_evidence) else 0
+
+
+#: Why a gate had nothing to judge, in the terms of what to do about it.
+#: A bare "no evidence" tells a reader that something is missing without
+#: telling them which of four different things it is.
+_STARVED_WHY = {
+    "G1": "no ledger rows (--ledger-json / DATABASE_URL)",
+    "G2": "no provider charges to reconcile against (--charges-json); "
+    "nexus integrates no billing API, so this is the project's stated gap",
+    "G3": "no conformance run in this invocation",
+    "G4": "no ledger rows (--ledger-json / DATABASE_URL)",
+}
+
+
+def _judge(has_evidence: bool, check) -> tuple[str, list[str]]:
+    if not has_evidence:
+        return NO_EVIDENCE, []
+    violations = check()
+    return (FAILED, violations) if violations else (PASSED, [])
 
 
 if __name__ == "__main__":

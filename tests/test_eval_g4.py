@@ -77,9 +77,14 @@ def test_eval_exits_two_when_a_gate_fails():
     assert "G4" in proc.stdout + proc.stderr
 
 
-def test_eval_exits_zero_when_every_gate_passes():
+def test_eval_exits_zero_when_no_gate_fails():
+    # Renamed from "when every gate passes", which is what this used to
+    # claim and never checked. With no ledger and no charge feed the gates
+    # judge nothing; nothing failing is still exit 0, but the distinction
+    # between that and four green gates now has to survive in the name too.
     proc = subprocess.run(
         [sys.executable, "-m", "nexus.eval"],
         cwd=ROOT, capture_output=True, text=True, env=_env(),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "FAILED" not in proc.stdout + proc.stderr

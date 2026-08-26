@@ -84,6 +84,9 @@ def test_fail_demo_g3_does_not_trip_the_other_gates():
         cwd=ROOT, capture_output=True, text=True, env=_env(),
     )
     combined = proc.stdout + proc.stderr
-    assert "G1: passed" in combined
-    assert "G2: passed" in combined
-    assert "G4: passed" in combined
+    # "did not fire", not "passed" -- see the same assertion in
+    # tests/test_eval_g2.py for why the difference matters.
+    assert "G1: FAILED" not in combined
+    assert "G2: FAILED" not in combined
+    assert "G4: FAILED" not in combined
+    assert "G3: FAILED" in combined
