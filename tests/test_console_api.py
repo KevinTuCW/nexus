@@ -71,6 +71,16 @@ def test_quota_panel_calls_zero_budget_switched_off(client):
         tenant="switched-off-tenant",
         budget_nanousd_per_day=0,
     )
+    # The panel is scoped to what the caller may see, so the injected tenant
+    # has to be inside wuwork's grant or this test would assert on a row the
+    # console is now correct to withhold.
+    state.policies["wuwork"] = replace(
+        state.policies["wuwork"],
+        cross_tenant_read=(
+            *state.policies["wuwork"].cross_tenant_read,
+            "switched-off-tenant",
+        ),
+    )
     body = client.get("/console/quota", headers=H).json()
     by_tenant = {row["tenant"]: row for row in body["tenants"]}
     assert by_tenant["switched-off-tenant"]["state"] == "switched_off"

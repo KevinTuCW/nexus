@@ -18,6 +18,7 @@ noise, which is the same as not logging them.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from nexus.ingress.auth import AuthError, authenticate
+from nexus.ingress.authz import CrossTenantDenied, authorize_explicit
 from nexus.ledger.book import rollup
 from nexus.state import get_state
 
@@ -36,23 +37,12 @@ def usage(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     requested = tuple(t.strip() for t in tenants.split(",")) if tenants else (caller,)
-    crossings = tuple(t for t in requested if t != caller)
-
-    if crossings:
-        policy = state.policies[caller]
-        ungranted = [t for t in crossings if t not in policy.cross_tenant_read]
-        if ungranted:
-            state.audit.record_cross_tenant_denial(caller, crossings)
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"tenant '{caller}' has no cross_tenant_read grant for "
-                    f"{ungranted}. Refusing the whole request rather than "
-                    "returning a partial answer: a partial answer reads as "
-                    "'they spent nothing'."
-                ),
-            )
-        state.audit.record_cross_tenant_read(caller, crossings)
+    try:
+        requested = authorize_explicit(
+            caller, requested, state.policies, state.audit
+        )
+    except CrossTenantDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     wanted = set(requested)
     rows = [row for row in state.ledger.entries() if row.tenant in wanted]

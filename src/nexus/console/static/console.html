@@ -14,12 +14,19 @@
   td,th { border-bottom:1px solid var(--line); padding:6px 10px; text-align:left; }
   th { color:var(--dim); font-weight:400; }
   .pass{color:var(--ok)} .regressed{color:var(--bad)} .not_covered{color:var(--none)}
+  .active{color:var(--ok)} .over_budget{color:var(--bad);font-weight:600}
+  .switched_off{color:var(--none)}
+  .scope { color:var(--dim); font-size:12px; margin:-4px 0 10px; }
   .veto { color:var(--bad); font-weight:600; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
           padding:12px 18px 20px; }
   .unit { color:var(--dim); font-size:12px; }
 </style>
 <div id="banner" class="banner">loading…</div>
+<!-- Which tenants this screen covers. A view silently missing a business
+     line looks exactly like a group where that line spent nothing, so the
+     answer is stated rather than left to be inferred from the rows. -->
+<div id="scope" class="scope">scope: …</div>
 <div class="card">
   <h2>COST ATTRIBUTION <span class="unit">nano-USD</span></h2><table id="costs"></table>
   <h2>ROUTING · vetoes first</h2><table id="routing"></table>
@@ -49,10 +56,14 @@ get("/console/mode").then(m => {
   if (m.upstream === "fake") b.classList.add("fake");
 });
 
-get("/console/costs").then(d => table(
-  document.getElementById("costs"),
-  [["tenant", r => r[0]], ["spend", r => usd(r[1])]],
-  Object.entries(d.by_tenant)));
+get("/console/costs").then(d => {
+  document.getElementById("scope").textContent =
+    "scope: " + d.scope.join(", ") +
+    "  ·  这一屏只覆盖调用方被授权看见的租户";
+  table(document.getElementById("costs"),
+    [["tenant", r => r[0]], ["spend", r => usd(r[1])]],
+    Object.entries(d.by_tenant));
+});
 
 get("/console/routing").then(d => {
   // Vetoes first. They are the only reason to open this panel; accepted
@@ -81,5 +92,9 @@ get("/console/fallbacks").then(d => table(
 get("/console/quota").then(d => table(
   document.getElementById("quota"),
   [["tenant", r => r.tenant], ["budget", r => usd(r.budget_nanousd_per_day)],
-   ["spent", r => usd(r.spent_nanousd)], ["state", r => r.state]], d.tenants));
+   ["spent (today)", r => usd(r.spent_nanousd)],
+   ["state", r => `<span class="${r.state}" title="${
+      r.state === "over_budget" ? "当日预算已用尽 —— 新请求正在被 429 拒绝"
+      : r.state === "switched_off" ? "预算 0 表示关停，不是无限" : ""
+    }">${r.state}</span>`]], d.tenants));
 </script>
