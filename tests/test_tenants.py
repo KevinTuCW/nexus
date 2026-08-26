@@ -1,6 +1,6 @@
 import pytest
 
-from nexus.registry.tenants import load_policies, substitution_allowed
+from nexus.registry.tenants import TenantPolicy, load_policies, substitution_allowed
 
 
 def test_loads_the_five_tenants(policies_dir):
@@ -73,3 +73,25 @@ def test_wuwork_is_the_one_authorised_crossing(policies_dir):
     assert set(reg["wuwork"].cross_tenant_read) == {
         "helpmate", "shopscout", "wealthwise", "aura"
     }
+
+
+def test_a_directly_constructed_policy_grants_nothing():
+    # `test_cross_tenant_read_defaults_to_nothing` looks like it pins the
+    # dataclass default, but it does not: `load_policies` always passes the
+    # field explicitly, so the class-level default is unreachable from that
+    # path. Found by mutating the class default and watching nothing go red.
+    #
+    # The default is still the last line of defence for anything that builds
+    # a TenantPolicy directly -- a new caller, a test fixture -- and for
+    # those it is the only thing standing between a missing argument and a
+    # tenant that can read everyone.
+    policy = TenantPolicy(
+        tenant="direct",
+        integration="native",
+        repo_path=None,
+        gate_command="make test",
+        api_key_env="NEXUS_KEY_DIRECT",
+        allow_fallback=True,
+        budget_nanousd_per_day=1,
+    )
+    assert policy.cross_tenant_read == ()
