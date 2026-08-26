@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
+    # Same DSN shape and port as the sibling tenant repos, so a developer
+    # moving between them does not have to remember which is which.
+    ports: ["5432:5432"]
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 3s
+      retries: 10
+
+  nexus:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://nexus:nexus@db:5432/nexus
+      # fake, always, unless someone types otherwise. A compose file that
+      # reaches real providers by default bills whoever ran `up` to look
+      # around, and the console gives them no clue it happened -- which is
+      # why the console carries an UPSTREAM banner.
+      UPSTREAM: fake
+      NEXUS_KEY_WUWORK: dev-wuwork
+    ports: ["8000:8000"]

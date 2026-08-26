@@ -1,0 +1,19 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e '.[dev,llm,pg]'
+      # Offline only. There are no credentials here, and the tests that need
+      # them skip themselves by design.
+      #
+      # Deliberately not running the live suite: a CI that fails for want of
+      # a secret gets a `continue-on-error` within a week, and a CI nobody
+      # trusts is worse than no CI -- it is a green badge over an unread
+      # result.
+      - run: PYTHONPATH=src:. python -m pytest -q

@@ -47,28 +47,44 @@ runs under `make test-live` and is skipped without them.
 
 ## Status
 
-Phase 2b. Routing, gate G1's diversity guard, gate G4's fallback chain,
-streaming metering, non-standard endpoint passthrough, a Postgres ledger and
-Langfuse tracing are all in. Real providers are reached through LiteLLM and
-are **opt-in** (`UPSTREAM=litellm`); the default stays on a deterministic
-fake so a fresh clone cannot bill anyone for running `make test`.
+Phase 3c — the code repo is complete.
 
-Two tenants have been integrated and measured without a single line changed
-in their repos — see `docs/integration-helpmate.md` and
-`docs/integration-shopscout.md`. The latter also documents a deliberate
-attack on G1: unpinning three jury models collapsed a three-lab jury into
-three copies of one model, cut the bill by 91%, and produced no error of any
-kind.
+Routing, gate G1's diversity guard, gate G4's fallback chain, streaming
+metering, non-standard endpoint passthrough, a Postgres ledger and Langfuse
+tracing are in. Real providers are reached through LiteLLM and are
+**opt-in** (`UPSTREAM=litellm`); the default stays on a deterministic fake,
+so a fresh clone cannot bill anyone for running `make test` — and the
+console carries a banner saying which one is in use, because a console
+pointed at the fake looks exactly like one pointed at real providers.
 
-Phase 3a is in: the `wuwork` tenant, its own offline gate, the G3
-conformance runner and baseline comparison. The runner has been pointed at
-all four incumbent repos — two yield full metric baselines, one yields
-pass/fail only, and one exceeds a conformance-pass time budget. See
-`docs/wuwork.md`; the failures are recorded rather than tidied away.
+**All four gates run under `python -m nexus.eval` and exit 2 on any
+violation.** Each has a `--fail-demo` that injects the failure it exists to
+catch, so "this gate can fail" is a command you can run rather than a claim
+in a commit message.
 
-Still to come in Phase 3b: the four gates wired to `exit 2` with a
-falsification test each, the cross-business-line digest (measured as *reuse*
-cost, separately from onboarding), and the FinOps console.
+Two incumbent tenants have been integrated and measured without a single
+line changed in their repos — see `docs/integration-helpmate.md` and
+`docs/integration-shopscout.md`. The latter documents a deliberate attack on
+G1: unpinning three jury models collapsed a three-lab jury into three copies
+of one model, cut the bill by 91%, and produced no error of any kind.
+
+The conformance runner has been pointed at all four incumbent repos: two
+yield full metric baselines, one yields pass/fail only, and one exceeds a
+conformance-pass time budget. `docs/wuwork.md` records what each one did,
+failures included.
+
+## Costs, and why they are three numbers
+
+| | lines | the question it answers |
+|---|---|---|
+| onboarding | **57** | what a new business line pays to reach the gateway at all |
+| reuse, tenant side | **73** | what the *next* team pays to build on another line's data |
+| reuse, platform side | **121** | paid once; the second tenant to want this pays none of it |
+
+Adding them together answers none of the three. The platform figure is also
+the honest price of making reuse safe rather than merely convenient: without
+the grant and the audit trail, crossing a tenant boundary would have cost a
+tenant nothing and cost the group its isolation.
 
 ## Running tests
 
@@ -82,9 +98,22 @@ you typed, not something you inherited.
 ```bash
 python3.12 -m venv .venv
 make install
-make test
-make run
+make test          # offline, hermetic
+make run           # dev server on :8000
+python -m nexus.eval           # the four gates; exit 2 on any violation
+python -m nexus.eval --fail-demo g1   # ...and proof that one can fail
 ```
+
+Or with Postgres:
+
+```bash
+docker compose up --build
+# console at http://localhost:8000/console?key=dev-wuwork
+```
+
+The image runs its own test suite at build time in a stage that has `git`
+and `make` — the isolation and conformance tests shell out to both — and
+ships a runtime stage that has neither.
 
 ## Stated blanks
 
@@ -93,3 +122,6 @@ make run
 - Reconciliation against a real provider is not independent. The provider's response is the only figure available, so `charges()` prices the **raw** payload while the ledger prices the normalised one — enough to catch a normalisation bug, not enough to catch a provider that under-reports. A genuinely independent source would be the provider's billing API, which is not integrated.
 - For streams the client abandons, no usage frame arrives, so the ledger books the number of content deltas seen. A delta is not a token: rows with `status = 'aborted'` are a **lower bound**, and reconciliation asserts a bound rather than an equality for them. Over-billing an aborted call is still reported.
 - Passthrough endpoints (`/rerank`) are forwarded but not billed. Rerank is not priced per token; putting it through the token ledger would mean inventing a figure, and reconciliation would then confirm the invention. The gap is recorded here instead.
+- The audit trail lives in memory. `cross_tenant_read_audit` exists in `db/schema.sql` but nothing writes to it yet, so the record of who read whose usage dies with the process. An audit trail that answers questions only until the next restart is worth saying out loud.
+- helpmate's gate belongs to G3's live arm, not the offline one. It runs 53 golden cases through real retrieval and generation against a live database, which is longer than a conformance pass should block for. The offline arm does not cover it.
+- The conformance runner cannot leave a tenant checkout untouched, only put it back. Running helpmate's gate rewrites `eval/report.md`; the runner refuses to start against an already-dirty checkout, restores tracked files afterwards, and lists untracked ones without deleting them. See `## The zero-touch contract` for what the claim narrowed to and why.
