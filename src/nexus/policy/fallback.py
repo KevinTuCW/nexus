@@ -27,6 +27,15 @@ def fallback_chain(
 
     Empty when the tenant forbids fallback, and empty when the requested
     model is pinned. Cheapest first, on the same proxy routing uses.
+
+    **The tenant's own requested model is always in the chain.** It needs no
+    permission: serving what was asked for is not a substitution, and
+    `guard()` returns early on it. Deriving the chain purely from
+    `substitution_allowed` left it out whenever a model's own family was
+    absent from its `substitutable_to` list -- so a tenant whose cheaper
+    substitute was down got a 503 while the model it actually asked for sat
+    there healthy. Routing is allowed to look for something cheaper; it is
+    not allowed to make the tenant's own choice unreachable.
     """
     if not policy.allow_fallback:
         return ()
@@ -34,6 +43,9 @@ def fallback_chain(
         model
         for model in prices
         if model != decision.model
-        and substitution_allowed(policy, decision.requested, family_of(model))
+        and (
+            model == decision.requested
+            or substitution_allowed(policy, decision.requested, family_of(model))
+        )
     ]
     return tuple(sorted(alternatives, key=lambda m: rank_key(prices[m])))

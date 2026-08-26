@@ -102,3 +102,36 @@ def test_unpriced_models_never_enter_the_chain(policies):
     d = choose(policies["wuwork"], "zai/glm-4.6", PRICES)
     for model in fallback_chain(policies["wuwork"], d, PRICES):
         assert model in PRICES
+
+
+def test_the_requested_model_is_always_reachable_as_a_fallback():
+    """Routing may look for something cheaper. It may not make the tenant's
+    own choice unreachable.
+
+    Built rather than loaded, because no shipped policy has the shape: a
+    model permitted to move to *another* family but not listed as permitting
+    its own. Under the old chain, routing would substitute to the cheaper
+    qwen3, and if that qwen3 was down the tenant got a 503 while the glm it
+    actually asked for was healthy and idle.
+    """
+    policy = TenantPolicy(
+        tenant="cross-family",
+        integration="native",
+        repo_path=None,
+        gate_command="make test",
+        api_key_env="NEXUS_KEY_UNUSED",
+        allow_fallback=True,
+        budget_nanousd_per_day=1,
+        models={"zai/glm-4.6": ModelPolicy(substitutable_to=("qwen3",))},
+    )
+    d = choose(policy, "zai/glm-4.6", PRICES)
+    assert d.model != "zai/glm-4.6", "routing was expected to substitute here"
+    assert "zai/glm-4.6" in fallback_chain(policy, d, PRICES)
+
+
+def test_a_pinned_model_still_has_an_empty_chain(policies):
+    # The control. "Always include the requested model" must not become a
+    # back door that hands a pinned juror somewhere to go: the requested
+    # model is the served model here, and the chain excludes it as before.
+    d = choose(policies["shopscout"], "zai/glm-4.6", PRICES)
+    assert fallback_chain(policies["shopscout"], d, PRICES) == ()
