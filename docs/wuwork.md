@@ -147,3 +147,23 @@ There is no baseline for aura (no metrics) or helpmate (gate not yet run to
 completion inside a budget). A missing baseline is recorded as missing;
 `nexus.assurance.baseline.compare` treats a metric that vanished as a
 regression precisely so that absence cannot be mistaken for health.
+
+## Reuse cost, measured — and why it is not one number
+
+| what | lines |
+|---|---|
+| tenant side: `digest.py` + `NexusClient.get_usage` | 73 (55 + 18) |
+| platform side, one-off: audit + `/v1/usage` + the grant field | 121 (52 + 67 + 2) |
+
+Onboarding cost was **57 lines**. Reuse cost is these two. They answer three
+different questions and adding them together answers none:
+
+- 57 is what it costs a new business line to reach the gateway at all.
+- The tenant-side figure is what the *next* team pays to build something on
+  another line's data, now that the mechanism exists.
+- The platform-side figure was paid once. The second tenant to want a
+  cross-line capability pays none of it.
+
+The platform figure is also the honest price of the thing that made this
+safe rather than convenient: without the grant and the audit trail, reuse
+would have cost a tenant nothing and cost the group its isolation.

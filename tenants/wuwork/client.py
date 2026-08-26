@@ -28,3 +28,22 @@ class NexusClient:
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
+
+    def get_usage(self, tenants: tuple[str, ...]) -> dict:
+        """Read usage for the named tenants through the gateway.
+
+        A 403 becomes `PermissionError` rather than an HTTP detail: the
+        digest's decision is "may I see all of this or not", and leaking the
+        transport's vocabulary into that decision would invite someone to
+        handle 403 and 404 differently when they mean the same thing here.
+        """
+        r = httpx.get(
+            f"{self._s.nexus_base_url.rstrip('/')}/usage",
+            params={"tenants": ",".join(tenants)},
+            headers={"Authorization": f"Bearer {self._s.nexus_api_key}"},
+            timeout=self._s.timeout_s,
+        )
+        if r.status_code == 403:
+            raise PermissionError(r.text)
+        r.raise_for_status()
+        return r.json()
