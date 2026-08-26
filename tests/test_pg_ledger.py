@@ -11,13 +11,44 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+#: These tests need an empty ledger to assert against, and they used to get
+#: one with `DELETE FROM ledger_entry` on whatever DATABASE_URL named --
+#: which `make test-live` reads out of `.env`. Point that at a ledger anyone
+#: cares about and running the tests erases the artifact the platform exists
+#: to produce, plus the evidence G1/G2/G4 are judged from. Nothing warns.
+#:
+#: So they get their own table, and it is created `LIKE ledger_entry
+#: INCLUDING ALL` rather than from a second copy of the DDL: derived from the
+#: real table, it cannot drift from it -- including the unique index on
+#: call_id, which one of these tests is specifically about.
+TEST_TABLE = "ledger_entry_pgtest"
+
+
 @pytest.fixture
 def ledger():
     from nexus.ledger.pg import PgLedger
 
-    book = PgLedger(DSN)
-    book.execute("DELETE FROM ledger_entry")
+    book = PgLedger(DSN, table=TEST_TABLE)
+    book.execute(
+        f"CREATE TABLE IF NOT EXISTS {TEST_TABLE} "
+        "(LIKE ledger_entry INCLUDING ALL)"
+    )
+    book.execute(f"DELETE FROM {TEST_TABLE}")
     return book
+
+
+def test_the_destructive_fixture_never_touches_the_real_ledger(ledger):
+    # The guard on the guard. If someone "simplifies" the fixture back to the
+    # real table, this notices -- and it notices by writing a row and then
+    # looking for it in the place it must not be.
+    import psycopg
+
+    ledger.record(_entry("c-guard", 1))
+    with psycopg.connect(DSN) as conn:
+        leaked = conn.execute(
+            "SELECT count(*) FROM ledger_entry WHERE call_id = %s", ("c-guard",)
+        ).fetchone()[0]
+    assert leaked == 0, "the pg tests are writing into the real ledger table"
 
 
 def _entry(call_id, cost, status="ok", fallback_from=None):

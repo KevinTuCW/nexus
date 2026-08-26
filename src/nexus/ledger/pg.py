@@ -12,6 +12,9 @@ point would be invisible for every small amount and wrong only for large
 ones, which is the kind of defect that survives a long time.
 """
 
+import re
+from datetime import datetime
+
 import psycopg
 
 from nexus.ledger.book import Entry
@@ -25,11 +28,30 @@ _COLUMNS = (
 )
 
 
-class PgLedger:
-    """Same surface as `InMemoryLedger`: `record()` and `entries()`."""
+#: A table name is spliced into SQL, so it is checked rather than trusted.
+#: Not because a caller is expected to be hostile -- because the moment an
+#: identifier reaches an f-string, "nobody would pass that" is the only thing
+#: standing between this module and an injection, and that is not a control.
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-    def __init__(self, dsn: str) -> None:
+
+class PgLedger:
+    """Same surface as `InMemoryLedger`: `record()` and `entries()`.
+
+    `table` exists so the destructive tests have somewhere to be destructive.
+    They need an empty ledger to assert against, and the way they got one was
+    `DELETE FROM ledger_entry` against whatever `DATABASE_URL` happened to
+    name -- which `make test-live` reads straight out of `.env`. Point that at
+    a ledger anyone cares about and running the test suite erases the exact
+    artifact this whole platform exists to produce, along with the evidence
+    G1, G2 and G4 are audited from. Nothing warns; the tests pass.
+    """
+
+    def __init__(self, dsn: str, table: str = "ledger_entry") -> None:
+        if not _IDENT.match(table):
+            raise ValueError(f"not a bare SQL identifier: {table!r}")
         self._dsn = dsn
+        self._table = table
 
     def execute(self, sql: str) -> None:
         with psycopg.connect(self._dsn) as conn:
@@ -38,7 +60,7 @@ class PgLedger:
     def record(self, entry: Entry) -> None:
         with psycopg.connect(self._dsn) as conn:
             conn.execute(
-                f"INSERT INTO ledger_entry ({_COLUMNS}) VALUES ("
+                f"INSERT INTO {self._table} ({_COLUMNS}) VALUES ("
                 "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     entry.entry_id,
@@ -66,7 +88,7 @@ class PgLedger:
     def entries(self) -> list[Entry]:
         with psycopg.connect(self._dsn) as conn:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM ledger_entry ORDER BY ts, entry_id"
+                f"SELECT {_COLUMNS} FROM {self._table} ORDER BY ts, entry_id"
             ).fetchall()
         return [
             Entry(
@@ -94,3 +116,19 @@ class PgLedger:
             )
             for r in rows
         ]
+
+    def spent_since(self, tenant: str, since: datetime) -> int:
+        """Sum one tenant's spend in the database, not in this process.
+
+        `COALESCE` because a tenant with no rows must come back as 0 rather
+        than as NULL: `None > budget` raises, and a quota check that raises
+        on a tenant's very first call of the day is a quota check that fails
+        open or fails loud on precisely the wrong request.
+        """
+        with psycopg.connect(self._dsn) as conn:
+            row = conn.execute(
+                f"SELECT COALESCE(SUM(cost_nanousd), 0) FROM {self._table} "
+                "WHERE tenant = %s AND ts >= %s",
+                (tenant, since),
+            ).fetchone()
+        return int(row[0])
