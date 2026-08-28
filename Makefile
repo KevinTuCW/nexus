@@ -1,4 +1,11 @@
-PY = PYTHONPATH=src:. .venv/bin/python
+# Locally this repo is driven out of .venv/. CI is not: it installs into the
+# runner's own interpreter and never creates one. That matters beyond taste,
+# because `make wuwork-eval` is not only typed by hand -- the conformance
+# tests shell out to it as wuwork's gate. A hardcoded .venv/bin/python turns
+# three of them red on every CI run for a reason that has nothing to do with
+# the code under test.
+PYBIN := $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+PY = PYTHONPATH=src:. $(PYBIN)
 
 install:
 	.venv/bin/pip install -e '.[dev]'
