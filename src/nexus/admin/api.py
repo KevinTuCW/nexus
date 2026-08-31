@@ -19,6 +19,12 @@ and it is a weekly operational act; sending it through review would push
 operators to bypass the whole control plane at 2am. It stays hot, with a
 threshold above which a second administrator has to sign.
 
+Access is by username, password and a server-side session, never a bearer
+token. The scheme this replaced could only reach a browser through
+`/admin?key=…`, because an address bar cannot set a header -- and a secret in
+a query string reaches the access log, the `Referer` of every outbound link,
+and browser history.
+
 Every write recomposes in place and never calls `get_state.cache_clear()`.
 Clearing rebuilds `State`, discarding `RoutingLog` -- the record of what G1
 vetoed, and the only reason the console's routing panel has anything in it.
@@ -26,48 +32,45 @@ vetoed, and the only reason the console's routing panel has anything in it.
 
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Cookie, HTTPException, Response
 from fastapi.responses import FileResponse
 
 from nexus.admin import proposal
 from nexus.admin.store import ControlPlaneStore, TenantKeyStore
 from nexus.config import get_settings
-from nexus.ingress.admin_auth import Admin, AdminAuthError, authenticate_admin
+from nexus.admin.accounts import (
+    COOKIE_NAME,
+    SESSION_LIFETIME,
+    AccountStore,
+    Admin,
+    LoginFailed,
+)
 from nexus.registry.effective import CAPABILITY_FIELDS, Override
 from nexus.state import get_state
 
 router = APIRouter()
 
 
-def _admin(authorization: str) -> Admin:
-    """Authenticate an administrator, or refuse.
+def _accounts() -> AccountStore:
+    return AccountStore(get_settings().database_url)
 
-    403 rather than 401 for a valid tenant credential: the caller proved who
-    they are and the answer is still no. Saying 401 would invite them to
-    retry with the same key, which will never work.
+
+def _admin(session: str) -> Admin:
+    """Resolve the session cookie to an administrator, or refuse.
+
+    The control plane no longer accepts any bearer credential at all, so a
+    tenant key reaching here is simply not a session and gets the same 401
+    as an expired one. The two namespaces cannot be confused because only
+    one of them has a login.
     """
-    state = get_state()
-    try:
-        return authenticate_admin(authorization, state.admin_index)
-    except AdminAuthError as exc:
-        try:
-            from nexus.ingress.auth import authenticate
-
-            tenant = authenticate(authorization, state.key_index)
-        except Exception:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"'{tenant}' is a tenant credential. The control plane is a "
-                "separate namespace; a data-plane key never carries "
-                "administrative power."
-            ),
-        ) from exc
+    admin = _accounts().resolve(session or "")
+    if admin is None:
+        raise HTTPException(status_code=401, detail="未登录或会话已过期")
+    return admin
 
 
-def _writer(authorization: str) -> Admin:
-    admin = _admin(authorization)
+def _writer(session: str) -> Admin:
+    admin = _admin(session)
     if not admin.may_write:
         raise HTTPException(
             status_code=403, detail=f"administrator '{admin.name}' is read-only"
@@ -129,13 +132,68 @@ def _policy_snapshot(tenant: str) -> dict:
     }
 
 
+# --- login ---------------------------------------------------------------
+
+
+@router.post("/admin/login")
+def login(response: Response, body: dict = Body(...)) -> dict:
+    """Exchange a username and password for a session cookie.
+
+    The cookie is `HttpOnly` so page scripts cannot read it, `SameSite=Strict`
+    so another site cannot make an authenticated request on the operator's
+    behalf, and `Secure` by default -- browsers treat `http://localhost` as a
+    trustworthy origin, so that still works for local development.
+
+    The token never appears in the response body. Putting it there would
+    invite somebody to store it, and stored credentials end up in query
+    strings, which is the failure this whole change exists to remove.
+    """
+    settings = get_settings()
+    try:
+        token, admin = _accounts().login(
+            str(body.get("username", "")), str(body.get("password", ""))
+        )
+    except LoginFailed as exc:
+        # One message for unknown account, wrong password, locked and
+        # disabled. Distinguishing them hands out a username oracle.
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="strict",
+        secure=settings.admin_cookie_secure,
+        max_age=int(SESSION_LIFETIME.total_seconds()),
+        path="/",
+    )
+    return {"admin": admin.name, "role": admin.role}
+
+
+@router.post("/admin/logout")
+def logout(
+    response: Response,
+    session: str = Cookie(default="", alias=COOKIE_NAME),
+) -> dict:
+    """End this session server-side, then clear the cookie.
+
+    Server-side first. Clearing only the cookie would leave a live row that
+    anyone holding the token could still use, which is the difference between
+    logging out and merely looking logged out.
+    """
+    if session:
+        _accounts().logout(session)
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
 # --- identity ------------------------------------------------------------
 
 
 @router.get("/admin/whoami")
-def whoami(authorization: str = Header(default="")) -> dict:
+def whoami(session: str = Cookie(default="", alias="nexus_admin_session")) -> dict:
     """Who the control plane thinks you are. Named, never "admin"."""
-    admin = _admin(authorization)
+    admin = _admin(session)
     return {"admin": admin.name, "role": admin.role}
 
 
@@ -143,14 +201,14 @@ def whoami(authorization: str = Header(default="")) -> dict:
 
 
 @router.get("/admin/tenants")
-def tenants(authorization: str = Header(default="")) -> dict:
+def tenants(session: str = Cookie(default="", alias="nexus_admin_session")) -> dict:
     """Declared and effective, side by side.
 
     Side by side because either alone misleads. Only the effective value
     cannot answer "was it always so, or did somebody tighten it"; only the
     declared value is a screen that lies about what the gateway is doing.
     """
-    _admin(authorization)
+    _admin(session)
     cp, keys = _stores()
     state = get_state()
     overrides = cp.list_overrides()
@@ -239,10 +297,10 @@ def orphan_overrides() -> list[dict]:
 
 @router.post("/admin/overrides")
 def add_override(
-    authorization: str = Header(default=""), body: dict = Body(...)
+    session: str = Cookie(default="", alias="nexus_admin_session"), body: dict = Body(...)
 ) -> dict:
     """Remove one capability. Takes effect immediately."""
-    admin = _writer(authorization)
+    admin = _writer(session)
     tenant = body.get("tenant", "")
     field = body.get("field", "")
     reason = (body.get("reason") or "").strip()
@@ -294,11 +352,11 @@ def add_override(
 @router.post("/admin/overrides/{override_id}/lift")
 def lift_override(
     override_id: int,
-    authorization: str = Header(default=""),
+    session: str = Cookie(default="", alias="nexus_admin_session"),
     body: dict = Body(default={}),
 ) -> dict:
     """The inverse action. Every hot change is required to have one."""
-    admin = _writer(authorization)
+    admin = _writer(session)
     cp, _ = _stores()
     match = [o for o in cp.list_overrides() if o["id"] == override_id]
     if not match:
@@ -315,10 +373,10 @@ def lift_override(
 
 @router.post("/admin/budget")
 def set_budget(
-    authorization: str = Header(default=""), body: dict = Body(...)
+    session: str = Cookie(default="", alias="nexus_admin_session"), body: dict = Body(...)
 ) -> dict:
     """Change a budget. Lowering is always free; raising has a threshold."""
-    admin = _writer(authorization)
+    admin = _writer(session)
     tenant = body.get("tenant", "")
     reason = (body.get("reason") or "").strip()
     state = get_state()
@@ -357,7 +415,14 @@ def set_budget(
                 status_code=403,
                 detail="复核人不能是提交人——两只眼睛不是四只眼睛",
             )
-        if approved_by not in {a.name for a in get_state().admin_index.values()}:
+        # The approver has to be a real, writable, live account. A free-text
+        # name would make the second signature a formality anyone could type.
+        approvers = {
+            a["username"]
+            for a in _accounts().list_accounts()
+            if a["state"] == "active" and a["role"] == "rw"
+        }
+        if approved_by not in approvers:
             raise HTTPException(
                 status_code=400, detail=f"'{approved_by}' 不是已知管理员"
             )
@@ -383,19 +448,19 @@ def set_budget(
 
 
 @router.get("/admin/keys")
-def list_keys(authorization: str = Header(default="")) -> dict:
+def list_keys(session: str = Cookie(default="", alias="nexus_admin_session")) -> dict:
     """Prefix and status only. Never the secret, and never its digest."""
-    _admin(authorization)
+    _admin(session)
     _, keys = _stores()
     return {"keys": keys.list_for_console()}
 
 
 @router.post("/admin/keys")
 def issue_key(
-    authorization: str = Header(default=""), body: dict = Body(...)
+    session: str = Cookie(default="", alias="nexus_admin_session"), body: dict = Body(...)
 ) -> dict:
     """Mint a credential. The plaintext is in this response and nowhere else."""
-    admin = _writer(authorization)
+    admin = _writer(session)
     tenant = body.get("tenant", "")
     if tenant not in get_state().declared:
         raise HTTPException(status_code=404, detail=f"no such tenant '{tenant}'")
@@ -420,9 +485,9 @@ def issue_key(
 
 
 @router.post("/admin/keys/{key_id}/revoke")
-def revoke_key(key_id: str, authorization: str = Header(default="")) -> dict:
+def revoke_key(key_id: str, session: str = Cookie(default="", alias="nexus_admin_session")) -> dict:
     """Kill a credential. There is deliberately no un-revoke."""
-    admin = _writer(authorization)
+    admin = _writer(session)
     cp, keys = _stores()
     match = [k for k in keys.list_for_console() if k["key_id"] == key_id]
     if not match:
@@ -438,9 +503,9 @@ def revoke_key(key_id: str, authorization: str = Header(default="")) -> dict:
 
 
 @router.post("/admin/proposals")
-def propose(authorization: str = Header(default=""), body: dict = Body(...)) -> dict:
+def propose(session: str = Cookie(default="", alias="nexus_admin_session"), body: dict = Body(...)) -> dict:
     """A diff and the gates' verdict. Writes nothing, by design."""
-    _admin(authorization)
+    _admin(session)
     tenant = body.get("tenant", "")
     state = get_state()
     if tenant not in state.declared:
@@ -462,27 +527,20 @@ def propose(authorization: str = Header(default=""), body: dict = Body(...)) -> 
 
 
 @router.get("/admin/actions")
-def actions(authorization: str = Header(default="")) -> dict:
+def actions(session: str = Cookie(default="", alias="nexus_admin_session")) -> dict:
     """Who changed what. Named actors, never a shared identity."""
-    _admin(authorization)
+    _admin(session)
     cp, _ = _stores()
     return {"actions": cp.recent_actions()}
 
 
 @router.get("/admin")
-def admin_page(
-    authorization: str = Header(default=""), key: str = Query(default="")
-) -> FileResponse:
-    """The page shell. Unlike the console's, this one authenticates.
+def admin_page() -> FileResponse:
+    """The page shell, unauthenticated -- because it *is* the login form.
 
-    The console's shell is public because every panel it fetches is not, and
-    a page that renders nothing without a key leaks nothing. This page
-    carries write controls, so it is not served to an anonymous caller.
-
-    `?key=` is accepted because a browser address bar cannot set a header,
-    which is the same reason the console reads one. It is a real weakness --
-    query strings reach logs and `Referer` headers -- and it is the price of
-    a zero-build page. Worth writing down rather than leaving to be noticed.
+    Serving this anonymously is not the leak it would have been under the old
+    scheme. It carries no data: every panel it fetches requires a session, and
+    a page that renders nothing without one gives away nothing but its own
+    existence. The credential no longer travels in the URL at all.
     """
-    _admin(authorization or f"Bearer {key}")
     return FileResponse(Path(__file__).resolve().parent / "static" / "admin.html")

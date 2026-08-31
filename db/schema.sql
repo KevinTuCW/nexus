@@ -134,3 +134,40 @@ CREATE TABLE IF NOT EXISTS admin_action (
 );
 
 CREATE INDEX IF NOT EXISTS admin_action_ts ON admin_action (ts DESC);
+
+-- Control-plane accounts. Replaces the shared-key mechanism entirely: a key
+-- in a query string reaches server logs and `Referer` headers, and a browser
+-- address bar cannot set a header, so key-in-URL was the only way that
+-- scheme could work in a browser at all.
+--
+-- Passwords are scrypt-hashed with a per-account salt. Never reversible,
+-- never logged, never returned by any endpoint.
+CREATE TABLE IF NOT EXISTS admin_account (
+    username      TEXT PRIMARY KEY,
+    -- scrypt(password, salt, n=2^14, r=8, p=1, dklen=32), hex encoded.
+    password_hash TEXT NOT NULL,
+    salt          TEXT NOT NULL,
+    role          TEXT NOT NULL CHECK (role IN ('rw', 'ro')),
+    created_at    TIMESTAMPTZ NOT NULL,
+    last_login_at TIMESTAMPTZ,
+    -- Throttling is per account, not global: a brute-force run against one
+    -- name must not lock every other administrator out of the console at
+    -- exactly the moment somebody is attacking it.
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until  TIMESTAMPTZ,
+    disabled_at   TIMESTAMPTZ
+);
+
+-- Sessions, server-side. The cookie carries an opaque token and nothing
+-- else; the table decides what it means. That makes a session revocable --
+-- a signed cookie holding its own claims is valid until it expires no
+-- matter what the server learns in the meantime.
+CREATE TABLE IF NOT EXISTS admin_session (
+    token_sha256 TEXT PRIMARY KEY,
+    username     TEXT NOT NULL REFERENCES admin_account(username),
+    created_at   TIMESTAMPTZ NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS admin_session_username ON admin_session (username);

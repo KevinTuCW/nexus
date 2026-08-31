@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     budget_raise_factor_without_approval: float = 2.0
     #: 10 USD/day, written as integer nano-USD like every other amount here.
     budget_ceiling_without_approval: int = 10_000_000_000
+    # Session cookie flags. `Secure` defaults on: browsers treat
+    # http://localhost as a trustworthy origin, so this still works for local
+    # development, and defaulting it off would be a silent downgrade
+    # everywhere else. Turning it off has to be something you typed.
+    admin_cookie_secure: bool = True
 
 
 def get_settings() -> Settings:

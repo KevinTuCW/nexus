@@ -17,7 +17,6 @@ from functools import lru_cache
 
 from nexus.audit import InMemoryAudit
 from nexus.config import get_settings
-from nexus.ingress.admin_auth import Admin, load_admin_index
 from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
 from nexus.policy.diversity import GroupLedger
@@ -31,9 +30,6 @@ from nexus.upstream import FakeUpstream, Upstream
 class State:
     policies: dict[str, TenantPolicy]
     key_index: dict[str, str]
-    #: Control-plane identities, a separate namespace from `key_index`. Empty
-    #: means no administrators, which means `/admin` is not mounted at all.
-    admin_index: dict[str, Admin]
     ledger: Ledger
     upstream: Upstream
     #: Per-group weight-family reservations, for native tenants only.
@@ -138,10 +134,6 @@ def get_state() -> State:
     return State(
         policies=policies,
         key_index=key_index,
-        # Built against the tenant index so a credential serving both roles
-        # is refused here, at startup, rather than discovered later as a
-        # tenant key that happened to work on the control plane.
-        admin_index=load_admin_index(key_index),
         ledger=ledger,
         upstream=upstream,
         groups=GroupLedger(),

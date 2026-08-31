@@ -25,10 +25,11 @@ TABLES = {
     "tenant_budget": "tenant_budget_cptest",
     "admin_action": "admin_action_cptest",
     "tenant_key": "tenant_key_cptest",
+    "admin_account": "admin_account_cptest",
+    "admin_session": "admin_session_cptest",
 }
 
-RW = {"Authorization": "Bearer nx-a"}
-RO = {"Authorization": "Bearer nx-b"}
+PASSWORD = "correct-horse-battery"
 
 
 @pytest.fixture
@@ -36,10 +37,12 @@ def client(monkeypatch, policies_dir):
     import psycopg
 
     from nexus.admin import api as admin_api
+    from nexus.admin.accounts import AccountStore
     from nexus.admin.store import ControlPlaneStore, TenantKeyStore
     from nexus.app import create_app
 
     with psycopg.connect(DSN) as conn:
+        conn.execute(f"DROP TABLE IF EXISTS {TABLES['admin_session']}")
         for real, test in TABLES.items():
             conn.execute(f"DROP TABLE IF EXISTS {test}")
             conn.execute(f"CREATE TABLE {test} (LIKE {real} INCLUDING ALL)")
@@ -47,7 +50,17 @@ def client(monkeypatch, policies_dir):
     monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
     monkeypatch.setenv("DATABASE_URL", DSN)
     monkeypatch.setenv("NEXUS_KEY_WUWORK", "sk-wuwork")
-    monkeypatch.setenv("NEXUS_ADMIN_KEYS", "kevin:nx-a,ops-li:ro:nx-b")
+    # Cookies over the test client are plain http and it stores whatever it
+    # is given, but Secure would still be wrong to assert here.
+    monkeypatch.setenv("ADMIN_COOKIE_SECURE", "false")
+
+    accounts = AccountStore(
+        DSN, TABLES["admin_account"], TABLES["admin_session"]
+    )
+    monkeypatch.setattr(admin_api, "_accounts", lambda: accounts)
+    accounts.create("kevin", PASSWORD, "rw")
+    accounts.create("ops-li", PASSWORD, "ro")
+    accounts.create("mei", PASSWORD, "rw")
 
     def stores():
         return (
@@ -66,15 +79,26 @@ def client(monkeypatch, policies_dir):
     # assertion below would be testing nothing.
     monkeypatch.setattr(admin_api, "_stores", stores)
     get_state.cache_clear()
-    yield TestClient(create_app())
+    c = TestClient(create_app())
+    # Log in as the read-write administrator; tests that need the read-only
+    # one call `login(c, "ops-li")` to swap the session.
+    login(c, "kevin")
+    yield c
     get_state.cache_clear()
     with psycopg.connect(DSN) as conn:
         for test in TABLES.values():
             conn.execute(f"DROP TABLE IF EXISTS {test}")
 
 
+def login(client, username, password=PASSWORD):
+    """Log in and let the test client carry the session cookie."""
+    return client.post(
+        "/admin/login", json={"username": username, "password": password}
+    )
+
+
 def _tenant(client, name="wuwork"):
-    rows = client.get("/admin/tenants", headers=RW).json()["tenants"]
+    rows = client.get("/admin/tenants").json()["tenants"]
     return next(t for t in rows if t["tenant"] == name)
 
 
@@ -85,8 +109,7 @@ def test_switching_a_tenant_off_takes_effect_immediately(client):
     assert _tenant(client)["enabled"] is True
     r = client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "field": "enabled",
             "removed_value": "true",
@@ -108,8 +131,7 @@ def test_removing_a_substitution_narrows_the_effective_policy(client):
     assert "qwen3" in before
     client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "field": "substitutable_to",
             "model": "siliconflow/Qwen/Qwen3-8B",
@@ -128,8 +150,7 @@ def test_removing_a_substitution_narrows_the_effective_policy(client):
 def test_a_tightening_without_a_reason_is_refused(client):
     r = client.post(
         "/admin/overrides",
-        headers=RW,
-        json={"tenant": "wuwork", "field": "enabled", "reason": "  "},
+                json={"tenant": "wuwork", "field": "enabled", "reason": "  "},
     )
     assert r.status_code == 400
     assert "reason" in r.json()["detail"]
@@ -138,8 +159,7 @@ def test_a_tightening_without_a_reason_is_refused(client):
 def test_the_override_layer_refuses_a_field_it_cannot_narrow(client):
     r = client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "field": "budget_nanousd_per_day",
             "removed_value": "1",
@@ -156,8 +176,7 @@ def test_the_override_layer_refuses_a_field_it_cannot_narrow(client):
 def test_lifting_an_override_restores_the_declared_value(client):
     r = client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "field": "cross_tenant_read",
             "removed_value": "aura",
@@ -167,7 +186,7 @@ def test_lifting_an_override_restores_the_declared_value(client):
     oid = r.json()["override_id"]
     assert "aura" not in _tenant(client)["effective"]["cross_tenant_read"]
 
-    client.post(f"/admin/overrides/{oid}/lift", headers=RW)
+    client.post(f"/admin/overrides/{oid}/lift")
     assert "aura" in _tenant(client)["effective"]["cross_tenant_read"]
 
 
@@ -183,8 +202,7 @@ def test_applying_an_override_does_not_wipe_the_routing_log(client):
 
     client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "allow_fallback",
             "removed_value": "true", "reason": "x",
         },
@@ -201,8 +219,7 @@ def test_applying_an_override_does_not_wipe_the_routing_log(client):
 def test_lowering_a_budget_never_needs_approval(client):
     r = client.post(
         "/admin/budget",
-        headers=RW,
-        json={"tenant": "wuwork", "budget_nanousd_per_day": 0, "reason": "stop"},
+                json={"tenant": "wuwork", "budget_nanousd_per_day": 0, "reason": "stop"},
     )
     assert r.status_code == 200
     assert r.json()["effective"]["budget_nanousd_per_day"] == 0
@@ -213,8 +230,7 @@ def test_a_large_raise_needs_a_second_administrator(client):
     current = _tenant(client)["effective"]["budget_nanousd_per_day"]
     r = client.post(
         "/admin/budget",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "budget_nanousd_per_day": current * 10,
             "reason": "campaign",
@@ -228,8 +244,7 @@ def test_the_approver_cannot_be_the_proposer(client):
     current = _tenant(client)["effective"]["budget_nanousd_per_day"]
     r = client.post(
         "/admin/budget",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "budget_nanousd_per_day": current * 10,
             "reason": "campaign",
@@ -243,24 +258,22 @@ def test_a_large_raise_goes_through_with_a_second_administrator(client):
     current = _tenant(client)["effective"]["budget_nanousd_per_day"]
     r = client.post(
         "/admin/budget",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "budget_nanousd_per_day": current * 10,
             "reason": "campaign",
-            "approved_by": "ops-li",
+            "approved_by": "mei",
         },
     )
     assert r.status_code == 200
-    assert r.json()["approved_by"] == "ops-li"
+    assert r.json()["approved_by"] == "mei"
 
 
 def test_a_small_raise_needs_no_approval(client):
     current = _tenant(client)["effective"]["budget_nanousd_per_day"]
     r = client.post(
         "/admin/budget",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork",
             "budget_nanousd_per_day": current + 1,
             "reason": "tweak",
@@ -276,16 +289,14 @@ def test_a_stale_version_is_refused(client):
     stale = _tenant(client)["version"]
     client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "allow_fallback",
             "removed_value": "true", "reason": "first",
         },
     )
     r = client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "enabled", "removed_value": "true",
             "reason": "second", "version": stale,
         },
@@ -299,8 +310,7 @@ def test_the_version_spans_both_mutable_tables(client):
     before = _tenant(client)["version"]
     client.post(
         "/admin/budget",
-        headers=RW,
-        json={"tenant": "wuwork", "budget_nanousd_per_day": 1, "reason": "x"},
+                json={"tenant": "wuwork", "budget_nanousd_per_day": 1, "reason": "x"},
     )
     assert _tenant(client)["version"] != before
 
@@ -310,7 +320,7 @@ def test_the_version_spans_both_mutable_tables(client):
 
 def test_an_issued_key_works_immediately_and_is_shown_once(client):
     r = client.post(
-        "/admin/keys", headers=RW, json={"tenant": "wuwork", "label": "prod"}
+        "/admin/keys", json={"tenant": "wuwork", "label": "prod"}
     )
     assert r.status_code == 200
     plaintext = r.json()["api_key"]
@@ -322,15 +332,15 @@ def test_an_issued_key_works_immediately_and_is_shown_once(client):
         == 200
     )
     # And never retrievable again.
-    listing = client.get("/admin/keys", headers=RW).json()
+    listing = client.get("/admin/keys").json()
     assert plaintext not in str(listing)
 
 
 def test_revoking_a_key_takes_effect_immediately(client):
     issued = client.post(
-        "/admin/keys", headers=RW, json={"tenant": "wuwork", "label": "temp"}
+        "/admin/keys", json={"tenant": "wuwork", "label": "temp"}
     ).json()
-    client.post(f"/admin/keys/{issued['key_id']}/revoke", headers=RW)
+    client.post(f"/admin/keys/{issued['key_id']}/revoke")
     assert (
         client.get(
             "/console/costs", headers={"Authorization": f"Bearer {issued['api_key']}"}
@@ -346,8 +356,7 @@ def test_a_proposal_returns_a_diff_and_writes_nothing(client):
     before = _tenant(client)["declared"]["cross_tenant_read"]
     r = client.post(
         "/admin/proposals",
-        headers=RW,
-        json={"tenant": "helpmate", "field": "cross_tenant_read", "value": "wuwork"},
+                json={"tenant": "helpmate", "field": "cross_tenant_read", "value": "wuwork"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -363,8 +372,7 @@ def test_a_proposal_reports_no_evidence_rather_than_a_pass(client):
     # refuses to print `passed` for that case in nexus.eval.
     r = client.post(
         "/admin/proposals",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "substitutable_to",
             "model": "zai/glm-4.6", "value": "qwen3",
         },
@@ -373,10 +381,10 @@ def test_a_proposal_reports_no_evidence_rather_than_a_pass(client):
 
 
 def test_a_readonly_administrator_may_look_but_not_touch(client):
-    assert client.get("/admin/tenants", headers=RO).status_code == 200
+    login(client, "ops-li")
+    assert client.get("/admin/tenants").status_code == 200
     r = client.post(
         "/admin/overrides",
-        headers=RO,
         json={
             "tenant": "wuwork", "field": "enabled",
             "removed_value": "true", "reason": "x",
@@ -392,13 +400,12 @@ def test_a_readonly_administrator_may_look_but_not_touch(client):
 def test_every_change_is_attributed_to_a_person(client):
     client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "enabled",
             "removed_value": "true", "reason": "incident",
         },
     )
-    actions = client.get("/admin/actions", headers=RW).json()["actions"]
+    actions = client.get("/admin/actions").json()["actions"]
     assert actions
     assert actions[0]["actor"] == "kevin"
     assert actions[0]["action"] == "override.add.enabled"
@@ -407,10 +414,10 @@ def test_every_change_is_attributed_to_a_person(client):
 
 def test_the_audit_log_never_contains_a_credential(client):
     r = client.post(
-        "/admin/keys", headers=RW, json={"tenant": "wuwork", "label": "prod"}
+        "/admin/keys", json={"tenant": "wuwork", "label": "prod"}
     )
     plaintext = r.json()["api_key"]
-    actions = client.get("/admin/actions", headers=RW).json()["actions"]
+    actions = client.get("/admin/actions").json()["actions"]
     assert plaintext not in str(actions)
     assert any(a["action"] == "key.issue" for a in actions)
 
@@ -424,13 +431,12 @@ def test_an_orphan_override_is_listed_not_cleaned(client):
     # cleaning it silently would hide both possible causes.
     client.post(
         "/admin/overrides",
-        headers=RW,
-        json={
+                json={
             "tenant": "wuwork", "field": "cross_tenant_read",
             "removed_value": "a-tenant-that-left", "reason": "stale",
         },
     )
-    body = client.get("/admin/tenants", headers=RW).json()
+    body = client.get("/admin/tenants").json()
     assert len(body["orphans"]) == 1
     assert "a-tenant-that-left" in body["orphans"][0]["removed_value"]
     # Still present, not deleted.

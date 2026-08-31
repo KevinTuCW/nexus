@@ -1,32 +1,30 @@
 """nexus application wiring."""
 
-import os
-
 from fastapi import FastAPI
 
 from nexus.config import get_settings
 from nexus.console.api import router as console_router
-from nexus.ingress.admin_auth import ADMIN_KEYS_ENV
 from nexus.ingress.api import router
 from nexus.ingress.passthrough import router as passthrough_router
 from nexus.ingress.usage_api import router as usage_router
 
 
 def admin_is_available() -> bool:
-    """Both prerequisites for a control plane, checked before mounting one.
+    """The one prerequisite for a control plane: somewhere to write.
 
-    No administrators means nobody could act on it. No database means every
-    change it accepted would die at the next restart, and a control plane
-    whose changes do not survive is a lie -- the same judgement this
-    repository already makes when it refuses to call an empty ledger a pass.
+    A control plane whose changes die at the next restart is a lie -- the
+    same judgement this repository already makes when it refuses to call an
+    empty ledger a pass. So no database means no `/admin` at all, and a 404
+    rather than a 401: a 401 tells a scanner the surface exists and is worth
+    a dictionary.
 
-    Not mounted, rather than mounted and refusing everything. A 401 tells a
-    scanner the surface exists and is worth a dictionary; a 404 says there is
-    nothing here, which is true.
+    Accounts are *not* part of this condition, unlike the shared keys they
+    replaced. With no accounts the login form is there and nothing can get
+    past it, which is the same closed door -- and hiding the surface would
+    also hide the only page that tells a fresh operator how to create the
+    first account.
     """
-    return bool(
-        get_settings().database_url and os.environ.get(ADMIN_KEYS_ENV, "").strip()
-    )
+    return bool(get_settings().database_url)
 
 
 def create_app() -> FastAPI:

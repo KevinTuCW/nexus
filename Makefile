@@ -49,3 +49,23 @@ wuwork-eval:
 # .env is gitignored, so a fresh clone has none and must still start.
 run:
 	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m uvicorn nexus.app:app --reload
+
+# Control-plane accounts. Created from the shell, never over HTTP and never
+# from an environment variable: a bootstrap password in .env is a plaintext
+# credential in a file that gets copied and occasionally committed, and a
+# control plane that mints its own first administrator over HTTP has a
+# window in which anyone can be that administrator.
+#   make admin-add USER=kevin           (prompts, rw by default)
+#   make admin-add USER=li ROLE=ro
+#   make admin-list / admin-passwd USER=… / admin-disable USER=…
+admin-add:
+	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m nexus.admin.cli add $(USER) --role $(or $(ROLE),rw)
+
+admin-passwd:
+	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m nexus.admin.cli passwd $(USER)
+
+admin-disable:
+	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m nexus.admin.cli disable $(USER)
+
+admin-list:
+	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m nexus.admin.cli list

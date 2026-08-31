@@ -34,7 +34,24 @@
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
 </style>
 
+<!-- The login form is the page shell. Nothing below it is fetched until a
+     session exists, so serving this anonymously gives away nothing but the
+     surface's own existence. The credential never travels in the URL. -->
+<div id="login" class="card" hidden>
+  <h2>CONTROL PLANE · 登录</h2>
+  <form id="login-form" class="row" autocomplete="on">
+    <input id="u" name="username" placeholder="用户名" autocomplete="username">
+    <input id="p" name="password" type="password" placeholder="密码"
+           autocomplete="current-password">
+    <button type="submit">登录</button>
+  </form>
+  <p id="login-err" class="err"></p>
+  <p class="dim">账号由命令行创建，不经过网络：<code>make admin-add USER=&lt;name&gt;</code></p>
+</div>
+
+<div id="app" hidden>
 <div id="banner" class="banner">loading…</div>
+<div class="row"><button onclick="logout()">退出登录</button></div>
 <div id="alert" class="alert" hidden></div>
 
 <!-- Declared and effective side by side. Either alone misleads: only the
@@ -102,10 +119,13 @@
 </div>
 
 <div class="card"><h2>AUDIT · 谁改了什么</h2><table id="actions"></table></div>
+</div>
 
 <script>
-const KEY = new URLSearchParams(location.search).get("key") || "";
-const H = { "Authorization": "Bearer " + KEY, "Content-Type": "application/json" };
+// No credential in this file and none in the URL. The session lives in an
+// HttpOnly cookie, which this script cannot read -- that is the point:
+// a cross-site script injected here could not exfiltrate it either.
+const H = { "Content-Type": "application/json" };
 const usd = n => "$" + (n / 1e9).toFixed(6);
 const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
 let ROLE = "ro", VERSIONS = {};
@@ -115,7 +135,7 @@ let ROLE = "ro", VERSIONS = {};
 // raises, and every caller says so on screen.
 async function api(path, opts = {}) {
   let r;
-  try { r = await fetch(path, { headers: H, ...opts }); }
+  try { r = await fetch(path, { headers: H, credentials: "same-origin", ...opts }); }
   catch (e) { throw new Error(`${path} — 网络不可达`); }
   if (!r.ok) {
     const detail = await r.json().then(b => b.detail).catch(() => r.statusText);
@@ -151,21 +171,43 @@ function pair(dec, eff) {
     (gone.length ? ` <span class="narrowed">−${gone.map(esc).join(", ")}</span>` : "");
 }
 
-api("/admin/whoami").then(w => {
+function showLogin(msg) {
+  document.getElementById("login").hidden = false;
+  document.getElementById("app").hidden = true;
+  if (msg) document.getElementById("login-err").textContent = msg;
+}
+
+function showApp(w) {
   ROLE = w.role;
+  document.getElementById("login").hidden = true;
+  document.getElementById("app").hidden = false;
   const b = document.getElementById("banner");
   b.textContent = `管理员 ${w.admin} · ${w.role === "rw" ? "可写" : "只读"}`;
+  b.classList.toggle("ro", w.role !== "rw");
   if (w.role !== "rw") {
-    b.classList.add("ro");
-    document.querySelectorAll("button").forEach(x => x.disabled = true);
+    document.querySelectorAll("#app button").forEach(x => x.disabled = true);
   }
-}).catch(err => {
-  const b = document.getElementById("banner");
-  b.textContent = "未能确认身份 · " + err.message;
-  b.classList.add("ro");
-  note(KEY ? "凭据无效或不是管理员。" :
-    "未提供 key。用 /admin?key=<管理员 key> 打开（key 来自 NEXUS_ADMIN_KEYS）。");
-});
+  return refresh();
+}
+
+document.getElementById("login-form").onsubmit = async e => {
+  e.preventDefault();
+  document.getElementById("login-err").textContent = "";
+  try {
+    const w = await post("/admin/login", {
+      username: document.getElementById("u").value,
+      password: document.getElementById("p").value,
+    });
+    document.getElementById("p").value = "";
+    await showApp(w);
+  } catch (err) {
+    // One message for every kind of failure, matching the server: telling
+    // an attacker which half was wrong hands out a username oracle.
+    showLogin("用户名或密码不正确");
+  }
+};
+
+api("/admin/whoami").then(showApp).catch(() => showLogin(""));
 
 function loadTenants() {
   return api("/admin/tenants").then(d => {
@@ -240,6 +282,11 @@ function refresh() {
   return Promise.all([loadTenants(), loadKeys(), loadActions()]);
 }
 
+window.logout = async () => {
+  await post("/admin/logout").catch(() => null);
+  location.reload();
+};
+
 async function guard(fn) {
   try { await fn(); note("已生效。", true); await refresh(); }
   catch (err) { note(err.message); }
@@ -295,5 +342,4 @@ document.getElementById("p-go").onclick = async () => {
   } catch (err) { note(err.message); }
 };
 
-refresh();
 </script>
