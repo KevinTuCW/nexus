@@ -41,6 +41,11 @@ class TenantPolicy:
     #: rest on a boundary crossing nobody signed off. The first genuine
     #: reuse request is also the first request to leave its own tenant.
     cross_tenant_read: tuple[str, ...] = ()
+    #: Whether this tenant may reach the gateway at all. Declared here so a
+    #: policy file can ship a tenant switched off, and narrowed by the
+    #: control plane in Phase 4b. Default True: a missing field is a tenant
+    #: nobody disabled, not a tenant nobody enabled.
+    enabled: bool = True
     models: dict[str, ModelPolicy] = field(default_factory=dict)
 
 
@@ -65,6 +70,7 @@ def load_policies(policies_dir: Path) -> dict[str, TenantPolicy]:
             allow_fallback=bool(raw["allow_fallback"]),
             budget_nanousd_per_day=int(raw["budget_nanousd_per_day"]),
             cross_tenant_read=tuple(raw.get("cross_tenant_read", ())),
+            enabled=bool(raw.get("enabled", True)),
             models=models,
         )
         if policy.tenant != path.stem:

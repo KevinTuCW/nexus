@@ -95,3 +95,10 @@ def test_a_directly_constructed_policy_grants_nothing():
         budget_nanousd_per_day=1,
     )
     assert policy.cross_tenant_read == ()
+
+
+def test_a_tenant_is_enabled_unless_its_policy_says_otherwise(policies_dir):
+    # Default True. Defaulting to False would turn one missing field into a
+    # site-wide outage, and this field means "somebody switched it off", not
+    # "nobody switched it on".
+    assert all(p.enabled for p in load_policies(policies_dir).values())
