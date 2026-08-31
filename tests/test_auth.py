@@ -1,6 +1,11 @@
 import pytest
 
-from nexus.ingress.auth import AuthError, authenticate, build_key_index
+from nexus.ingress.auth import (
+    AuthError,
+    authenticate,
+    build_key_index,
+    key_digest,
+)
 from nexus.registry.tenants import load_policies
 
 
@@ -45,3 +50,43 @@ def test_duplicate_keys_across_tenants_are_refused(policies_dir, monkeypatch):
     monkeypatch.setenv("NEXUS_KEY_HELPMATE", "sk-same")
     with pytest.raises(ValueError):
         build_key_index(load_policies(policies_dir))
+
+
+def test_the_index_holds_no_plaintext(policies_dir, monkeypatch):
+    # Before Phase 4a this process held every tenant's key in the clear for
+    # its whole lifetime. A heap dump, a crash report or an attached debugger
+    # handed all five over in one step.
+    monkeypatch.setenv("NEXUS_KEY_WUWORK", "sk-secret")
+    index = build_key_index(load_policies(policies_dir))
+    assert "sk-secret" not in index
+    assert index[key_digest("sk-secret")] == "wuwork"
+
+
+def test_a_key_shared_across_the_two_sources_is_refused(policies_dir, monkeypatch):
+    # A bootstrap key colliding with an issued one is exactly as ambiguous as
+    # two bootstrap keys colliding, so it fails the same way: at startup.
+    monkeypatch.setenv("NEXUS_KEY_WUWORK", "sk-shared")
+    with pytest.raises(ValueError, match="share an API key"):
+        build_key_index(
+            load_policies(policies_dir),
+            stored={key_digest("sk-shared"): "helpmate"},
+        )
+
+
+def test_the_same_key_from_both_sources_for_one_tenant_is_not_a_collision(
+    policies_dir, monkeypatch
+):
+    # Not ambiguous: both name wuwork, so attribution has one answer.
+    monkeypatch.setenv("NEXUS_KEY_WUWORK", "sk-same")
+    index = build_key_index(
+        load_policies(policies_dir), stored={key_digest("sk-same"): "wuwork"}
+    )
+    assert authenticate("Bearer sk-same", index) == "wuwork"
+
+
+def test_an_issued_credential_authenticates_like_a_bootstrap_one(policies_dir):
+    # The store hands back plaintext; the index only ever saw the digest.
+    index = build_key_index(
+        load_policies(policies_dir), stored={key_digest("nx-issued"): "aura"}
+    )
+    assert authenticate("Bearer nx-issued", index) == "aura"

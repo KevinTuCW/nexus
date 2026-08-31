@@ -81,9 +81,19 @@ def get_state() -> State:
     else:
         ledger = InMemoryLedger()
 
+    # No database means no issued credentials -- not an error. A fresh clone
+    # still runs its whole test suite with nothing but the bootstrap keys in
+    # the environment, which is the same reason the ledger falls back to
+    # memory rather than refusing to start.
+    stored_digests: dict[str, str] = {}
+    if settings.database_url:
+        from nexus.admin.store import TenantKeyStore
+
+        stored_digests = TenantKeyStore(settings.database_url).active_digests()
+
     return State(
         policies=policies,
-        key_index=build_key_index(policies),
+        key_index=build_key_index(policies, stored=stored_digests),
         ledger=ledger,
         upstream=upstream,
         groups=GroupLedger(),

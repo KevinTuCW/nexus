@@ -50,3 +50,29 @@ CREATE TABLE IF NOT EXISTS cross_tenant_read_audit (
 
 CREATE INDEX IF NOT EXISTS cross_tenant_read_audit_caller_ts
     ON cross_tenant_read_audit (caller, ts);
+
+-- Issued tenant credentials. Never stores plaintext: the plaintext is
+-- returned once, in the response to the call that created it, and exists
+-- nowhere afterwards. Rows are never deleted -- dropping a revoked key
+-- deletes the answer to "who made that call in March" while the ledger still
+-- holds the money it cost.
+CREATE TABLE IF NOT EXISTS tenant_key (
+    key_id      TEXT PRIMARY KEY,
+    tenant      TEXT NOT NULL,
+    -- UNIQUE is the invariant, not a hint: two tenants sharing a key would
+    -- make attribution ambiguous and the ledger would confidently bill one
+    -- for the other's traffic.
+    key_sha256  TEXT NOT NULL UNIQUE,
+    -- First 8 characters, so a human can tell two live keys apart in the
+    -- console without either being recoverable from what is displayed.
+    key_prefix  TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    issued_by   TEXT NOT NULL,
+    issued_at   TIMESTAMPTZ NOT NULL,
+    revoked_by  TEXT,
+    -- NULL means live. Revocation is a timestamp rather than a delete so the
+    -- window a key was valid in stays answerable.
+    revoked_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS tenant_key_tenant ON tenant_key (tenant);
