@@ -1,4 +1,4 @@
-"""The control plane end to end: tightening hot, loosening by proposal only.
+"""The control plane end to end: tightening hot, loosening by request only.
 
 These use a real database because the whole subject is what survives a write.
 They use their *own* tables -- created `LIKE <real> INCLUDING ALL` so they
@@ -25,6 +25,7 @@ TABLES = {
     "tenant_budget": "tenant_budget_cptest",
     "admin_action": "admin_action_cptest",
     "tenant_key": "tenant_key_cptest",
+    "change_request": "change_request_cptest",
     "admin_account": "admin_account_cptest",
     "admin_session": "admin_session_cptest",
 }
@@ -38,7 +39,11 @@ def client(monkeypatch, policies_dir):
 
     from nexus.admin import api as admin_api
     from nexus.admin.accounts import AccountStore
-    from nexus.admin.store import ControlPlaneStore, TenantKeyStore
+    from nexus.admin.store import (
+        ChangeRequestStore,
+        ControlPlaneStore,
+        TenantKeyStore,
+    )
     from nexus.app import create_app
 
     with psycopg.connect(DSN) as conn:
@@ -78,6 +83,10 @@ def client(monkeypatch, policies_dir):
     # exercise -- the hot effect would silently become a no-op and every
     # assertion below would be testing nothing.
     monkeypatch.setattr(admin_api, "_stores", stores)
+    monkeypatch.setattr(
+        admin_api, "_requests",
+        lambda: ChangeRequestStore(DSN, TABLES["change_request"]),
+    )
     get_state.cache_clear()
     c = TestClient(create_app())
     # Log in as the read-write administrator; tests that need the read-only
@@ -167,7 +176,7 @@ def test_the_override_layer_refuses_a_field_it_cannot_narrow(client):
         },
     )
     assert r.status_code == 400
-    assert "proposals" in r.json()["detail"]
+    assert "change-requests" in r.json()["detail"]
 
 
 # --- every hot change has an inverse -------------------------------------
@@ -352,29 +361,30 @@ def test_revoking_a_key_takes_effect_immediately(client):
 # --- loosening has no write path -----------------------------------------
 
 
-def test_a_proposal_returns_a_diff_and_writes_nothing(client):
+def test_a_change_request_returns_the_config_and_writes_nothing(client):
     before = _tenant(client)["declared"]["cross_tenant_read"]
     r = client.post(
-        "/admin/proposals",
-                json={"tenant": "helpmate", "field": "cross_tenant_read", "value": "wuwork"},
+        "/admin/change-requests",
+                json={"tenant": "helpmate", "field": "cross_tenant_read",
+              "value": "wuwork", "reason": "复用需求"},
     )
     assert r.status_code == 200
     body = r.json()
-    assert "+cross_tenant_read" in body["diff"] or "wuwork" in body["diff"]
-    assert "policies/helpmate.yaml" in body["diff"]
+    assert "+cross_tenant_read" in body["config"] or "wuwork" in body["config"]
+    assert "policies/helpmate.yaml" in body["config"]
     # Nothing moved.
     assert _tenant(client)["declared"]["cross_tenant_read"] == before
     assert _tenant(client, "helpmate")["effective"]["cross_tenant_read"] == []
 
 
-def test_a_proposal_reports_no_evidence_rather_than_a_pass(client):
+def test_a_change_request_reports_no_evidence_rather_than_a_pass(client):
     # An empty ledger has not approved anything. This repository already
     # refuses to print `passed` for that case in nexus.eval.
     r = client.post(
-        "/admin/proposals",
+        "/admin/change-requests",
                 json={
             "tenant": "wuwork", "field": "substitutable_to",
-            "model": "zai/glm-4.6", "value": "qwen3",
+            "model": "zai/glm-4.6", "value": "qwen3", "reason": "x",
         },
     )
     assert r.json()["gates"]["verdict"] in {"no_evidence", "clean", "would_violate"}
@@ -391,7 +401,7 @@ def test_a_readonly_administrator_may_look_but_not_touch(client):
         },
     )
     assert r.status_code == 403
-    assert "read-only" in r.json()["detail"]
+    assert "只读权限" in r.json()["detail"]
 
 
 # --- audit ---------------------------------------------------------------
@@ -490,20 +500,21 @@ def test_a_readonly_admin_cannot_create_accounts(client):
     assert r.status_code == 403
 
 
-# --- creating a tenant is a proposal, not a write -------------------------
+# --- creating a tenant is a request, not a write -------------------------
 
 
 def test_creating_a_tenant_produces_a_file_not_a_row(client):
     before = {t["tenant"] for t in client.get("/admin/tenants").json()["tenants"]}
     r = client.post(
-        "/admin/proposals/tenant",
+        "/admin/change-requests/tenant",
         json={"tenant": "newline", "integration": "zero_touch",
-              "gate_command": "make eval", "budget_nanousd_per_day": 5},
+              "gate_command": "make eval", "budget_nanousd_per_day": 5,
+              "reason": "新业务线"},
     )
     assert r.status_code == 200
     body = r.json()
     assert body["path"] == "policies/newline.yaml"
-    assert "tenant: newline" in body["diff"]
+    assert "tenant: newline" in body["config"]
     # Nothing was created.
     after = {t["tenant"] for t in client.get("/admin/tenants").json()["tenants"]}
     assert after == before
@@ -513,24 +524,278 @@ def test_a_proposed_tenant_starts_closed(client):
     # No models, no cross-tenant grants, fallback off. A tenant that arrives
     # with permissions already granted is a tenant nobody reviewed.
     diff = client.post(
-        "/admin/proposals/tenant",
-        json={"tenant": "newline", "budget_nanousd_per_day": 5},
-    ).json()["diff"]
+        "/admin/change-requests/tenant",
+        json={"tenant": "newline", "budget_nanousd_per_day": 5, "reason": "x"},
+    ).json()["config"]
     assert "cross_tenant_read" not in diff
     assert "models" not in diff
     assert "allow_fallback: false" in diff
 
 
 def test_proposing_a_tenant_that_already_exists_is_refused(client):
-    r = client.post("/admin/proposals/tenant", json={"tenant": "wuwork"})
+    r = client.post("/admin/change-requests/tenant", json={"tenant": "wuwork", "reason": "x"})
     assert r.status_code == 409
 
 
-def test_the_new_tenant_proposal_does_not_claim_the_gates_passed(client):
+def test_the_new_tenant_change_request_does_not_claim_the_gates_passed(client):
     # An unbuilt tenant has no ledger rows, so the gates have judged nothing.
     # Saying "clean" here would be the empty-ledger lie in a new place.
     body = client.post(
-        "/admin/proposals/tenant", json={"tenant": "newline"}
+        "/admin/change-requests/tenant", json={"tenant": "newline", "reason": "x"}
     ).json()
     assert body["gates"]["verdict"] == "not_applicable"
     assert "verify_tenant" in body["gates"]["detail"]
+
+
+# --- account recovery: disable used to be a one-way door -----------------
+
+
+def test_a_disabled_account_can_be_brought_back(client):
+    client.post("/admin/accounts", json={"username": "temp", "password": PASSWORD})
+    client.post("/admin/accounts/temp/disable")
+    assert login(client, "temp").status_code == 401
+    login(client, "kevin")
+
+    assert client.post("/admin/accounts/temp/enable").status_code == 200
+    assert login(client, "temp").status_code == 200
+    login(client, "kevin")
+
+
+def test_re_enabling_does_not_revive_the_sessions_that_were_ended(client):
+    # "May log in again" and "the tokens from before still work" are two
+    # different promises, and only the first one is being made.
+    client.post("/admin/accounts", json={"username": "temp", "password": PASSWORD})
+    from fastapi.testclient import TestClient as _TC
+    other = _TC(client.app)
+    login(other, "temp")
+    assert other.get("/admin/whoami").status_code == 200
+
+    client.post("/admin/accounts/temp/disable")
+    client.post("/admin/accounts/temp/enable")
+    assert other.get("/admin/whoami").status_code == 401
+
+
+def test_unlock_clears_a_lockout_without_touching_the_password(client):
+    from nexus.admin.accounts import MAX_FAILED_ATTEMPTS
+
+    client.post("/admin/accounts", json={"username": "temp", "password": PASSWORD})
+    for _ in range(MAX_FAILED_ATTEMPTS):
+        login(client, "temp", "wrong-password-entirely")
+    login(client, "kevin")
+    assert _account(client, "temp")["state"] == "locked"
+    # Frozen, so the real password does not work either.
+    assert login(client, "temp").status_code == 401
+    login(client, "kevin")
+
+    assert client.post("/admin/accounts/temp/unlock").status_code == 200
+    assert login(client, "temp").status_code == 200
+    login(client, "kevin")
+
+
+def test_unlock_refuses_a_disabled_account_rather_than_quietly_enabling_it(client):
+    client.post("/admin/accounts", json={"username": "temp", "password": PASSWORD})
+    client.post("/admin/accounts/temp/disable")
+    r = client.post("/admin/accounts/temp/unlock")
+    assert r.status_code == 409
+    assert _account(client, "temp")["state"] == "disabled"
+
+
+def test_enabling_an_account_that_does_not_exist_is_a_404(client):
+    assert client.post("/admin/accounts/ghost/enable").status_code == 404
+
+
+def test_a_read_only_administrator_cannot_recover_accounts(client):
+    client.post("/admin/accounts", json={"username": "temp", "password": PASSWORD})
+    client.post("/admin/accounts/temp/disable")
+    login(client, "ops-li")
+    assert client.post("/admin/accounts/temp/enable").status_code == 403
+    assert client.post("/admin/accounts/temp/unlock").status_code == 403
+
+
+def _account(client, username):
+    rows = client.get("/admin/accounts").json()["accounts"]
+    return next(a for a in rows if a["username"] == username)
+
+
+# --- changing your own password ------------------------------------------
+
+
+NEW_PASSWORD = "a-different-long-password"
+
+
+def test_changing_your_password_requires_the_current_one(client):
+    r = client.post(
+        "/admin/password",
+        json={"current_password": "not-it", "new_password": NEW_PASSWORD},
+    )
+    assert r.status_code == 403
+    # And the old one still works, i.e. the failed attempt changed nothing.
+    assert login(client, "kevin").status_code == 200
+
+
+def test_a_failed_password_change_does_not_count_towards_the_lockout(client):
+    # Routing this through login() would freeze the account whose session is
+    # making the call -- the caller locks themselves out by mistyping.
+    from nexus.admin.accounts import MAX_FAILED_ATTEMPTS
+
+    for _ in range(MAX_FAILED_ATTEMPTS + 2):
+        client.post(
+            "/admin/password",
+            json={"current_password": "not-it", "new_password": NEW_PASSWORD},
+        )
+    assert _account(client, "kevin")["state"] == "active"
+    assert login(client, "kevin").status_code == 200
+
+
+def test_changing_your_password_ends_your_other_sessions_but_not_this_one(client):
+    from fastapi.testclient import TestClient as _TC
+
+    other = _TC(client.app)
+    login(other, "kevin")
+    assert other.get("/admin/whoami").status_code == 200
+
+    r = client.post(
+        "/admin/password",
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+    )
+    assert r.status_code == 200
+    assert r.json()["sessions_ended"] == 1
+    # The point of changing a password under suspicion is to evict whoever
+    # else is holding it.
+    assert other.get("/admin/whoami").status_code == 401
+    assert client.get("/admin/whoami").status_code == 200
+    assert login(client, "kevin", NEW_PASSWORD).status_code == 200
+
+
+def test_a_short_new_password_is_refused(client):
+    r = client.post(
+        "/admin/password",
+        json={"current_password": PASSWORD, "new_password": "short"},
+    )
+    assert r.status_code == 400
+    assert login(client, "kevin").status_code == 200
+
+
+def test_a_read_only_administrator_may_still_change_their_own_password(client):
+    # Refusing would mean their password can only ever be changed by somebody
+    # else, which is worse than letting them.
+    login(client, "ops-li")
+    r = client.post(
+        "/admin/password",
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+    )
+    assert r.status_code == 200
+    assert login(client, "ops-li", NEW_PASSWORD).status_code == 200
+
+
+def test_there_is_no_way_to_reset_somebody_elses_password(client):
+    # Deliberately absent: an administrator who can set a colleague's password
+    # to a value they know can sign in as that colleague, and the second
+    # signature on a budget raise stops meaning anything.
+    for path in ("/admin/accounts/mei/password", "/admin/accounts/mei/reset"):
+        assert client.post(path, json={"new_password": NEW_PASSWORD}).status_code == 404
+
+
+# --- the overview ---------------------------------------------------------
+@pytest.fixture
+def empty_ledger(client):
+    """Point State at a ledger with nothing in it.
+
+    `client` redirects every control-plane store to a `_cptest` table, but the
+    ledger is assembled into `State` straight from `DATABASE_URL` and shares
+    the real `ledger_entry` table with the developer's own gateway. Without
+    this, "the overview reports no evidence" passes or fails depending on
+    whether somebody ran a request against localhost this morning.
+    """
+    from nexus.ledger.book import InMemoryLedger
+
+    state = get_state()
+    original = state.ledger
+    state.ledger = InMemoryLedger()
+    yield state.ledger
+    state.ledger = original
+
+
+
+
+def test_the_overview_needs_a_session(client):
+    client.post("/admin/logout")
+    assert client.get("/admin/overview").status_code == 401
+
+
+def test_the_overview_says_no_evidence_rather_than_a_calm_zero(client, empty_ledger):
+    # Nothing has been through the gateway in this test's world. An alert that
+    # renders an unmeasured thing as 0 looks exactly like a measured all-clear.
+    body = client.get("/admin/overview").json()
+    assert body["totals"]["has_ledger_evidence"] is False
+    alerts = {a["key"]: a for a in body["alerts"]}
+    assert alerts["over_budget"]["count"] is None
+    assert alerts["failed"]["count"] is None
+    assert alerts["fallbacks"]["count"] is None
+    # These are derivable without any traffic, so they are real zeros.
+    assert alerts["orphans"]["count"] == 0
+    assert alerts["pending"]["count"] == 0
+
+
+def test_the_overview_labels_its_two_clocks_separately(client):
+    # Ledger figures are scoped to today on the gateway's own day boundary;
+    # routing vetoes come from an in-process log a restart empties. Reporting
+    # both as "today" would make a restart look like the anomalies went away.
+    alerts = {a["key"]: a for a in client.get("/admin/overview").json()["alerts"]}
+    assert alerts["failed"]["window"] == "today"
+    assert alerts["vetoed"]["window"] == "since_boot"
+
+
+def test_the_overview_states_which_upstream_is_answering(client):
+    # A console pointed at the fake upstream looks exactly like one pointed at
+    # real providers, and somebody raising a budget off these numbers needs to
+    # know which without going to find out.
+    assert client.get("/admin/overview").json()["upstream"] == "fake"
+
+
+def test_the_overview_counts_a_switched_off_tenant(client):
+    client.post(
+        "/admin/overrides",
+        json={"tenant": "wuwork", "field": "enabled",
+              "removed_value": "true", "reason": "incident"},
+    )
+    body = client.get("/admin/overview").json()
+    assert body["totals"]["tenants_off"] == 1
+
+
+def test_the_overview_surfaces_a_pending_change_request(client):
+    client.post(
+        "/admin/change-requests",
+        json={"tenant": "wuwork", "field": "cross_tenant_read",
+              "value": "medscope", "reason": "对账"},
+    )
+    alerts = {a["key"]: a for a in client.get("/admin/overview").json()["alerts"]}
+    assert alerts["pending"]["count"] == 1
+    assert alerts["pending"]["items"][0]["tenant"] == "wuwork"
+
+
+# --- the page is four files, and none of them carry data -----------------
+
+
+def test_the_page_assets_are_served(client):
+    for name, kind in [("admin.css", "text/css"),
+                       ("admin.js", "text/javascript"),
+                       ("terms.js", "text/javascript")]:
+        r = client.get(f"/admin/static/{name}")
+        assert r.status_code == 200, name
+        assert kind in r.headers["content-type"]
+
+
+def test_the_asset_route_is_a_whitelist_not_a_path_join(client):
+    # Joining a request path onto a directory is how a static handler becomes
+    # a way to read .env.
+    for name in ["../../../.env", "..%2f..%2fconfig.py", "nope.txt", "api.py"]:
+        assert client.get(f"/admin/static/{name}").status_code in (404, 400), name
+
+
+def test_the_assets_are_anonymous_but_carry_nothing(client):
+    client.post("/admin/logout")
+    for name in ["admin.css", "admin.js", "terms.js"]:
+        assert client.get(f"/admin/static/{name}").status_code == 200
+    # Every panel they draw still needs a session.
+    assert client.get("/admin/tenants").status_code == 401

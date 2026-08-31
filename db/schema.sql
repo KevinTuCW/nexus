@@ -171,3 +171,26 @@ CREATE TABLE IF NOT EXISTS admin_session (
 );
 
 CREATE INDEX IF NOT EXISTS admin_session_username ON admin_session (username);
+
+-- 变更申请。放开权限、新增租户这类改动没有运行时写入路径，所以这张表记的是
+-- 「谁申请了什么」，不是「谁获得了什么」——它一行也授不出去，与
+-- policy_override 没有 new_value 列是同一条约束的另一半。
+--
+-- **没有 status 列，这是刻意的。** 状态由现实推导：申请把 X 加到某租户，就去看
+-- 现在的 policies/<tenant>.yaml 里有没有 X。有就是已生效，没有就是待发布。
+-- 一个可以被人点成「已完成」的状态字段，迟早会有一条没发生的变更被标成完成。
+CREATE TABLE IF NOT EXISTS change_request (
+    id           BIGSERIAL PRIMARY KEY,
+    tenant       TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('widen', 'new_tenant')),
+    field        TEXT,
+    model        TEXT,
+    value        TEXT,
+    reason       TEXT NOT NULL,
+    -- 交给工程侧执行的那段配置，原样存下来：申请人看到的和落盘的是同一份。
+    payload      TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    requested_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS change_request_tenant ON change_request (tenant);

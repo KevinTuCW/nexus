@@ -107,12 +107,12 @@ class AccountStore:
 
     def create(self, username: str, password: str, role: str = "rw") -> None:
         if role not in {"rw", "ro"}:
-            raise ValueError(f"role must be 'rw' or 'ro', not {role!r}")
+            raise ValueError(f"权限只能是「可操作」或「只读」，收到的是 {role!r}")
         if len(password) < 12:
             # Not a policy theatre rule. This account can switch a tenant off
             # and mint credentials; a password someone can guess over lunch
             # is the weakest link in everything above it.
-            raise ValueError("password must be at least 12 characters")
+            raise ValueError("密码至少 12 位")
         digest, salt = hash_password(password)
         with psycopg.connect(self.dsn) as conn:
             conn.execute(
@@ -123,7 +123,7 @@ class AccountStore:
 
     def set_password(self, username: str, password: str) -> None:
         if len(password) < 12:
-            raise ValueError("password must be at least 12 characters")
+            raise ValueError("密码至少 12 位")
         digest, salt = hash_password(password)
         with psycopg.connect(self.dsn) as conn:
             conn.execute(
@@ -149,6 +149,78 @@ class AccountStore:
                 "WHERE username = %s AND revoked_at IS NULL",
                 (now, username),
             )
+
+    def enable(self, username: str) -> None:
+        """Undo `disable`. Sessions are *not* restored.
+
+        Disabling used to be a one-way door -- not even the CLI could undo it,
+        so one mistyped username meant editing the table by hand. Reversing it
+        here is the same rule every hot action in this control plane follows:
+        an action with no inverse is one people avoid using when they should.
+
+        The ended sessions stay ended. Re-enabling means "this person may log
+        in again", not "the tokens that were live an hour ago work again" --
+        reviving those would make a disable that was later reversed weaker
+        than one that was not.
+        """
+        with psycopg.connect(self.dsn) as conn:
+            conn.execute(
+                f"UPDATE {self.accounts_table} SET disabled_at = NULL, "
+                "failed_attempts = 0, locked_until = NULL WHERE username = %s",
+                (username,),
+            )
+
+    def unlock(self, username: str) -> None:
+        """Clear a failed-login lockout without touching the password.
+
+        The lockout expires on its own after `LOCKOUT`, so this is a
+        convenience -- but the alternative is an administrator locked out at
+        the moment they are needed, waiting fifteen minutes with a working
+        password in hand. It does not re-enable a disabled account: those are
+        two different states and collapsing them would make this button do
+        something nobody asked it to.
+        """
+        with psycopg.connect(self.dsn) as conn:
+            conn.execute(
+                f"UPDATE {self.accounts_table} SET failed_attempts = 0, "
+                "locked_until = NULL WHERE username = %s AND disabled_at IS NULL",
+                (username,),
+            )
+
+    def verify(self, username: str, password: str) -> bool:
+        """Is this the account's current password? No lockout side effects.
+
+        Separate from `login` because changing your own password has to check
+        the old one, and routing that through `login` would count a typo
+        towards the lockout that freezes the session you are already holding.
+        """
+        with psycopg.connect(self.dsn) as conn:
+            row = conn.execute(
+                f"SELECT password_hash, salt FROM {self.accounts_table} "
+                "WHERE username = %s",
+                (username,),
+            ).fetchone()
+        if row is None:
+            hash_password(password)
+            return False
+        candidate, _ = hash_password(password, row[1])
+        return hmac.compare_digest(candidate, row[0])
+
+    def revoke_other_sessions(self, username: str, keep_token: str) -> int:
+        """End every session for `username` except the one making the request.
+
+        Called after a password change. The point of changing a password under
+        suspicion is to evict whoever else is holding it; leaving their
+        sessions live means the change accomplishes nothing until they expire
+        on their own, up to twelve hours later.
+        """
+        with psycopg.connect(self.dsn) as conn:
+            n = conn.execute(
+                f"UPDATE {self.sessions_table} SET revoked_at = %s "
+                "WHERE username = %s AND revoked_at IS NULL AND token_sha256 <> %s",
+                (datetime.now(timezone.utc), username, token_digest(keep_token)),
+            ).rowcount
+        return n
 
     def list_accounts(self) -> list[dict]:
         """Never returns a hash or a salt."""

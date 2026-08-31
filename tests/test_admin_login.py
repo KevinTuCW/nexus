@@ -80,7 +80,7 @@ def test_the_table_never_holds_a_plaintext_password(accounts):
 
 def test_a_short_password_is_refused(accounts):
     # This account can switch a tenant off and mint credentials.
-    with pytest.raises(ValueError, match="12 characters"):
+    with pytest.raises(ValueError, match="12 位"):
         accounts.create("weak", "short", "rw")
 
 

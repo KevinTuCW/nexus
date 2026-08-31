@@ -36,7 +36,7 @@ def widen(
     """The policy `declared` would become if the request were granted."""
     if field == "substitutable_to":
         if model is None:
-            raise ValueError("a substitutable_to proposal must name a model")
+            raise ValueError("放宽可替代模型时必须指明是哪个模型")
         models = dict(declared.models)
         current = models.get(model, ModelPolicy())
         if value in current.substitutable_to:
@@ -53,7 +53,7 @@ def widen(
         )
     if field == "allow_fallback":
         return replace(declared, allow_fallback=True)
-    raise ValueError(f"'{field}' is not a loosenable field; expected {LOOSENABLE}")
+    raise ValueError(f"「{field}」不是可以申请放开的项，可选：{LOOSENABLE}")
 
 
 def new_tenant(
@@ -136,7 +136,7 @@ def gate_evidence(rows, policies: dict[str, TenantPolicy]) -> dict:
         return {
             "verdict": "no_evidence",
             "detail": (
-                "账本里没有可判的调用。这不是通过——是没有证据可以据以放行。"
+                "账目里还没有可判的调用。这不是通过——是没有证据可以据以放行。"
             ),
             "g1": [],
             "g4": [],
@@ -146,10 +146,10 @@ def gate_evidence(rows, policies: dict[str, TenantPolicy]) -> dict:
     return {
         "verdict": "would_violate" if (g1 or g4) else "clean",
         "detail": (
-            "在现有账本上，放开之后 G1/G4 仍然干净。这只说明历史流量不违规，"
-            "不保证未来流量不会——放开之后能做的事变多了。"
+            "按现有账目重算，放开之后多样性红线与降级透明红线仍然干净。"
+            "这只说明历史流量不违规，不保证未来流量不会——放开之后能做的事变多了。"
             if not (g1 or g4)
-            else "放开之后，现有账本里已经存在会违反硬门的调用。"
+            else "放开之后，现有账目里已经存在会触碰红线的调用。"
         ),
         "g1": g1,
         "g4": g4,
@@ -173,11 +173,15 @@ def build(
         "field": field,
         "value": value,
         "model": model,
-        "diff": unified_diff(declared, after),
+        # Named `config`, not `diff`. What this string is *for* is landing in
+        # a policy file; "diff" describes its format to an engineer and
+        # nothing at all to the person filing the request.
+        "config": unified_diff(declared, after),
         "no_op": after == declared,
         "gates": gate_evidence(rows, proposed),
         "how_to_apply": (
-            f"这是提案，不是改动——控制面没有写入放松的路径。把上面的 diff "
-            f"落到 policies/{declared.tenant}.yaml，走 review 合入，再重启网关。"
+            f"这是一份申请，不是一次改动——控制面没有放开权限的写入路径。"
+            f"把上面的配置交给工程侧落到 policies/{declared.tenant}.yaml，"
+            f"评审合入后随发布上线。"
         ),
     }

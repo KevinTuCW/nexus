@@ -1,0 +1,442 @@
+/*
+  Instrument-panel discipline: strict monospace, hairline rules, one signal
+  colour. Amber means exactly one thing on every screen -- "this differs from
+  what the policy file declares" -- so a scan of the console answers "what did
+  somebody change" without reading a word.
+
+  No webfonts. This repository is offline-first, and a control plane that
+  fetches from fonts.googleapis.com both breaks that and tells a third party
+  each time somebody opens it. The hierarchy comes from size, weight, tracking
+  and colour instead.
+
+  The three ink tiers were re-stepped against the panel surfaces rather than
+  chosen by eye. The old --fg-faint sat at 2.4:1 on #10141b while carrying
+  table headers and stat labels -- load-bearing text below the 4.5:1 floor.
+  They now measure 13.6 / 7.4 / 4.9 against the panel, so the hierarchy still
+  reads and all three are legible.
+*/
+:root {
+  --bg: #0a0c10;
+  --bg-rail: #070809;
+  --panel: #10141b;
+  --panel-2: #151a23;
+  --line: #1e2530;
+  --line-bright: #2c3542;
+  --fg: #d7dee8;
+  --fg-dim: #9aa5b5;
+  --fg-faint: #78849a;
+  --signal: #e0a33e;
+  --signal-dim: #4a3a1c;
+  --ok: #4bb87a;
+  --bad: #e05252;
+  --info: #4b9fd4;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --rail: 232px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/1.65 var(--mono);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+/* Atmosphere: two very low-opacity washes plus a fine grain, so the surface
+   reads as a lit panel rather than a flat fill. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 500px at 12% -10%, rgba(224,163,62,.055), transparent 70%),
+    radial-gradient(700px 600px at 100% 100%, rgba(75,159,212,.045), transparent 70%);
+}
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  opacity: .035; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ─────────────────────────── login ─────────────────────────── */
+
+#login {
+  position: fixed; inset: 0; z-index: 10;
+  display: grid; place-items: center; padding: 24px;
+}
+.login-card {
+  width: min(420px, 100%); position: relative;
+  background: linear-gradient(180deg, var(--panel) 0%, #0c1015 100%);
+  border: 1px solid var(--line-bright);
+  box-shadow: 0 40px 80px -30px #000, 0 0 0 1px rgba(255,255,255,.02) inset;
+  animation: rise .5s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+/* A signal strip along the top edge -- the one piece of colour on the page. */
+.login-card::before {
+  content: ""; position: absolute; top: -1px; left: -1px; right: -1px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--signal) 30%, var(--info) 70%, transparent);
+  animation: sweep 3.5s ease-in-out infinite;
+}
+@keyframes sweep { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+
+.login-head { padding: 30px 30px 22px; border-bottom: 1px solid var(--line); }
+.wordmark {
+  font-size: 26px; font-weight: 600; letter-spacing: .24em;
+  margin: 0 0 6px; color: var(--fg);
+}
+.wordmark b { color: var(--signal); font-weight: 600; }
+.login-sub { margin: 0; color: var(--fg-dim); font-size: 11px; letter-spacing: .16em; }
+.login-body { padding: 26px 30px 30px; }
+
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-size: 10px; letter-spacing: .18em;
+  color: var(--fg-faint); margin-bottom: 7px;
+}
+.field .hint {
+  display: block; margin-top: 6px; font-size: 11px; color: var(--fg-faint);
+  line-height: 1.6; letter-spacing: 0;
+}
+input, select, textarea {
+  width: 100%; background: #080a0e; color: var(--fg);
+  border: 1px solid var(--line-bright); border-radius: 0;
+  padding: 9px 11px; font: inherit; font-variant-numeric: tabular-nums;
+  transition: border-color .15s, box-shadow .15s;
+}
+textarea { resize: vertical; min-height: 64px; }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--signal);
+  box-shadow: 0 0 0 3px rgba(224,163,62,.1);
+}
+input::placeholder { color: var(--fg-faint); }
+input.bad-input { border-color: var(--bad); }
+.field.check { display: flex; align-items: flex-start; gap: 9px; }
+.field.check input { width: auto; margin-top: 3px; }
+.field.check label { margin: 0; font-size: 12px; letter-spacing: 0; color: var(--fg); }
+
+button {
+  background: transparent; color: var(--fg); font: inherit;
+  border: 1px solid var(--line-bright); border-radius: 0;
+  padding: 8px 16px; cursor: pointer; letter-spacing: .08em;
+  transition: background .15s, border-color .15s, color .15s;
+}
+button:hover:not(:disabled) { border-color: var(--signal); color: var(--signal); }
+button:disabled { color: var(--fg-faint); cursor: not-allowed; border-color: var(--line); }
+button.primary {
+  width: 100%; padding: 11px; border-color: var(--signal);
+  color: var(--signal); background: rgba(224,163,62,.06); letter-spacing: .2em;
+}
+button.primary:hover:not(:disabled) { background: rgba(224,163,62,.14); }
+button.danger { border-color: rgba(224,82,82,.4); color: var(--bad); }
+button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad);
+                                     background: rgba(224,82,82,.08); }
+button.tiny { padding: 3px 9px; font-size: 11px; letter-spacing: .04em; }
+button.link {
+  border: 0; padding: 0; color: var(--info); text-decoration: underline;
+  text-underline-offset: 3px; letter-spacing: 0;
+}
+button.link:hover:not(:disabled) { color: var(--signal); }
+
+.login-err {
+  min-height: 18px; margin: 12px 0 0; font-size: 11px; color: var(--bad);
+}
+.login-foot {
+  margin: 20px 0 0; padding-top: 16px; border-top: 1px solid var(--line);
+  color: var(--fg-faint); font-size: 11px; line-height: 1.8;
+}
+.login-foot code { color: var(--fg-dim); }
+
+/* ─────────────────────────── shell ─────────────────────────── */
+
+#app { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 100vh;
+       position: relative; z-index: 1; }
+
+.rail {
+  background: var(--bg-rail); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+}
+.rail-head { padding: 22px 20px 18px; border-bottom: 1px solid var(--line); }
+.rail-head .wordmark { font-size: 17px; letter-spacing: .2em; margin: 0; }
+.rail-head .login-sub { margin-top: 5px; font-size: 9px; }
+
+nav { padding: 12px 0; flex: 1; overflow-y: auto; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 20px; border: 0; background: none; text-align: left;
+  color: var(--fg-dim); cursor: pointer; letter-spacing: .04em;
+  border-left: 2px solid transparent; transition: color .12s, background .12s;
+}
+.nav-item:hover { color: var(--fg); background: rgba(255,255,255,.02); }
+.nav-item[aria-current="true"] {
+  color: var(--signal); background: rgba(224,163,62,.07);
+  border-left-color: var(--signal);
+}
+.nav-count {
+  margin-left: auto; font-size: 10px; color: var(--fg-faint);
+  border: 1px solid var(--line); padding: 0 5px; min-width: 20px; text-align: center;
+}
+.nav-count.alert { color: var(--signal); border-color: rgba(224,163,62,.45); }
+
+.rail-foot { padding: 14px 20px; border-top: 1px solid var(--line); font-size: 11px; }
+.who { color: var(--fg); margin-bottom: 8px; }
+.who .role { color: var(--signal); }
+.who .role.ro { color: var(--info); }
+.rail-foot .acts { display: flex; gap: 6px; }
+
+main { padding: 0 0 60px; min-width: 0; }
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 20px 30px 16px; border-bottom: 1px solid var(--line);
+  background: rgba(10,12,16,.92); backdrop-filter: blur(8px);
+}
+.topbar h1 { font-size: 15px; font-weight: 600; letter-spacing: .16em; margin: 0; }
+.topbar .hint { color: var(--fg-dim); font-size: 11px; }
+.topbar .spacer { flex: 1; }
+.view { padding: 24px 30px; animation: fade .3s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } }
+
+/* The upstream banner. Permanent and not foldable: a control plane pointed at
+   the deterministic fake upstream looks exactly like one pointed at real
+   providers, and somebody raising a budget needs to know which without
+   going to find out. */
+.upstream-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 30px; font-size: 11.5px; letter-spacing: .04em;
+  border-bottom: 1px solid var(--line);
+}
+.upstream-bar.fake { background: rgba(75,159,212,.09); color: var(--info); }
+.upstream-bar.real { background: rgba(224,163,62,.1); color: var(--signal); }
+.upstream-bar b { letter-spacing: .12em; }
+
+/* ─────────────────────────── pieces ─────────────────────────── */
+
+.panel { border: 1px solid var(--line); background: var(--panel); margin-bottom: 22px; }
+.panel-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+}
+.panel-head h2 { font-size: 11px; letter-spacing: .18em; color: var(--fg-dim);
+                 margin: 0; font-weight: 500; }
+.panel-head .spacer { flex: 1; }
+.panel-body { padding: 18px; }
+.panel-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+@media (max-width: 1100px) { .panel-cols { grid-template-columns: 1fr; } }
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; font-weight: 500; font-size: 10px; letter-spacing: .16em;
+  color: var(--fg-faint); padding: 9px 14px; border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr { transition: background .12s; }
+tbody tr:hover { background: rgba(255,255,255,.018); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; }
+tr.sub td { padding-top: 0; }
+tr.clickable { cursor: pointer; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+
+.tag {
+  display: inline-block; font-size: 10px; letter-spacing: .1em;
+  padding: 1px 7px; border: 1px solid var(--line-bright); color: var(--fg-dim);
+  white-space: nowrap;
+}
+.tag.on { color: var(--ok); border-color: rgba(75,184,122,.4); }
+.tag.off { color: var(--fg-faint); }
+.tag.amber { color: var(--signal); border-color: rgba(224,163,62,.45);
+             background: rgba(224,163,62,.07); }
+.tag.bad { color: var(--bad); border-color: rgba(224,82,82,.45); }
+.tag.info { color: var(--info); border-color: rgba(75,159,212,.4); }
+
+/* Amber = differs from the declared file. One meaning, every screen. */
+.narrowed { color: var(--signal); }
+.struck { color: var(--fg-faint); text-decoration: line-through;
+          text-decoration-color: var(--bad); }
+.dim { color: var(--fg-dim); }
+.faint { color: var(--fg-faint); }
+.err { color: var(--bad); }
+.mono-key { color: var(--fg-dim); }
+
+/* ── dashboard ── */
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+             gap: 1px; background: var(--line); border: 1px solid var(--line);
+             margin-bottom: 22px; }
+.stat { background: var(--panel); padding: 16px 18px; }
+.stat .l { font-size: 10px; letter-spacing: .16em; color: var(--fg-faint); }
+.stat .v { font-size: 26px; margin-top: 6px; letter-spacing: -.01em; color: var(--fg); }
+.stat .v.amber { color: var(--signal); }
+.stat .v.ok { color: var(--ok); }
+.stat .v.bad { color: var(--bad); }
+.stat .s { font-size: 10.5px; color: var(--fg-faint); margin-top: 3px; }
+
+/* Alerts. Severity is carried by a word as well as a colour -- a red dot and
+   an amber dot are the same dot to a colourblind reader, and this list is
+   the one screen somebody scans when something is wrong. */
+.alert-list { display: flex; flex-direction: column; }
+.alert-row {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: none; border-left: 0; border-right: 0; border-top: 0;
+  text-align: left; color: var(--fg); cursor: pointer;
+}
+.alert-row:last-child { border-bottom: 0; }
+.alert-row:hover { background: rgba(255,255,255,.022); border-color: var(--line); color: var(--fg); }
+.alert-row:disabled { cursor: default; }
+.alert-row .sev {
+  font-size: 10px; letter-spacing: .12em; padding: 1px 7px; white-space: nowrap;
+  border: 1px solid var(--line-bright); color: var(--fg-faint);
+}
+.alert-row.bad .sev { color: var(--bad); border-color: rgba(224,82,82,.45); }
+.alert-row.warn .sev { color: var(--signal); border-color: rgba(224,163,62,.45); }
+.alert-row.info .sev { color: var(--info); border-color: rgba(75,159,212,.4); }
+/* Measured and clean is green. Not measured at all is grey -- deliberately
+   not green, because the whole reason this list has three states is that a
+   thing nobody checked must not wear the same colour as a thing that passed.
+   The word differs too ("正常" vs "暂无数据"), but colour is read first. */
+.alert-row.quiet .sev { color: var(--ok); border-color: rgba(75,184,122,.35); }
+.alert-row.unknown .sev { color: var(--fg-faint); border-color: var(--line-bright); }
+.alert-row.unknown .n { color: var(--fg-faint); font-size: 13px; }
+.alert-row .body { flex: 1; min-width: 0; }
+.alert-row .t { color: var(--fg); }
+.alert-row .d { font-size: 11px; color: var(--fg-faint); margin-top: 2px; }
+.alert-row .n { font-size: 19px; color: var(--fg); white-space: nowrap; }
+.alert-row.quiet .n { color: var(--fg-faint); font-size: 13px; }
+.alert-row .win {
+  font-size: 10px; letter-spacing: .1em; color: var(--fg-faint);
+  white-space: nowrap; min-width: 72px; text-align: right;
+}
+
+/* Ranked magnitude bars. One hue, because this is a single series measuring
+   one quantity -- colouring the five rows differently would imply the colours
+   mean something. The number beside each bar wears an ink token, not the
+   series colour: the bar carries magnitude, the text carries the value. */
+.bars { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.bar-row { display: grid; grid-template-columns: 128px 1fr auto; gap: 12px;
+           align-items: center; padding: 5px 0; }
+.bar-row .name { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+.bar-track { background: #080a0e; border: 1px solid var(--line); height: 14px; }
+.bar-fill {
+  height: 100%; background: var(--signal); opacity: .8;
+  border-radius: 0 4px 4px 0; min-width: 2px;
+}
+.bar-row .val { color: var(--fg); white-space: nowrap; font-size: 12px; }
+.bar-row .val small { color: var(--fg-faint); }
+
+/* ── content blocks ── */
+
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+             gap: 14px; align-items: end; }
+.note {
+  border-left: 2px solid var(--signal); background: rgba(224,163,62,.05);
+  padding: 11px 14px; color: var(--fg-dim); font-size: 11.5px; line-height: 1.7;
+  margin-bottom: 18px;
+}
+.note.bad { border-color: var(--bad); background: rgba(224,82,82,.05); }
+.note.info { border-color: var(--info); background: rgba(75,159,212,.05); }
+.note b { color: var(--fg); font-weight: 600; }
+.note:last-child { margin-bottom: 0; }
+
+pre {
+  background: #070a0e; border: 1px solid var(--line); padding: 14px;
+  overflow: auto; font-size: 12px; line-height: 1.6; margin: 0;
+  white-space: pre-wrap; word-break: break-word; color: var(--fg-dim);
+  max-height: 340px;
+}
+pre .add { color: var(--ok); }
+pre .del { color: var(--bad); }
+pre .hd { color: var(--info); }
+
+#toast {
+  position: fixed; right: 24px; bottom: 24px; z-index: 60;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+}
+.toast {
+  background: var(--panel-2); border: 1px solid var(--line-bright);
+  border-left: 2px solid var(--ok); padding: 11px 16px; max-width: 460px;
+  box-shadow: 0 20px 40px -18px #000; animation: slide .28s cubic-bezier(.2,.8,.2,1) both;
+  font-size: 12px;
+}
+.toast.bad { border-left-color: var(--bad); color: var(--bad); }
+@keyframes slide { from { opacity: 0; transform: translateX(16px); } }
+
+.secret {
+  background: #070a0e; border: 1px dashed var(--signal); padding: 14px;
+  display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+}
+.secret code { flex: 1; color: var(--signal); word-break: break-all; font-size: 12px; }
+.empty { padding: 30px; text-align: center; color: var(--fg-faint); font-size: 12px; }
+.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+.filters .field { margin: 0; min-width: 150px; }
+[hidden] { display: none !important; }
+
+/* ─────────────────────────── dialog ─────────────────────────── */
+
+/* Native <dialog>: the browser supplies the focus trap, ESC, inertness of the
+   page behind, and the top layer. Reimplementing those in a few lines of
+   vanilla JS is how a console ends up with a modal you can tab out of. */
+dialog {
+  padding: 0; border: 1px solid var(--line-bright); border-radius: 0;
+  background: var(--panel); color: var(--fg); font: inherit;
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
+  box-shadow: 0 40px 90px -30px #000;
+}
+dialog.wide { width: min(860px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(4,6,9,.72); backdrop-filter: blur(3px); }
+dialog[open] { animation: rise .22s cubic-bezier(.2,.8,.2,1) both; }
+
+.dlg-head {
+  padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  display: flex; align-items: center; gap: 12px;
+}
+.dlg-head h2 { margin: 0; font-size: 13px; letter-spacing: .1em; font-weight: 600; }
+.dlg-head .spacer { flex: 1; }
+.dlg-body { padding: 20px; overflow-y: auto; max-height: calc(100vh - 210px); }
+.dlg-intro { margin: 0 0 18px; color: var(--fg-dim); font-size: 11.5px; line-height: 1.75; }
+.dlg-intro b { color: var(--fg); }
+.dlg-foot {
+  padding: 14px 20px; border-top: 1px solid var(--line); background: var(--panel-2);
+  display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+}
+.dlg-foot .spacer { flex: 1; }
+
+/* The server's refusal renders here, inside the dialog, and the values the
+   operator typed stay in their boxes. A toast that fades after four seconds
+   while the form resets itself makes people retype everything to read the
+   error again. */
+.dlg-err {
+  border-left: 2px solid var(--bad); background: rgba(224,82,82,.07);
+  padding: 10px 13px; color: var(--bad); font-size: 11.5px; line-height: 1.7;
+  margin-bottom: 16px;
+}
+.dlg-live {
+  border-left: 2px solid var(--info); background: rgba(75,159,212,.06);
+  padding: 10px 13px; color: var(--fg-dim); font-size: 11.5px; line-height: 1.7;
+  margin: -4px 0 16px;
+}
+.dlg-live.warn { border-color: var(--signal); background: rgba(224,163,62,.06); }
+.dlg-live b { color: var(--fg); }
+.dlg-static {
+  background: #080a0e; border: 1px solid var(--line); padding: 9px 11px;
+  color: var(--fg-dim);
+}
+.kv { display: grid; grid-template-columns: 150px 1fr; gap: 8px 14px; font-size: 12px; }
+.kv dt { color: var(--fg-faint); }
+.kv dd { margin: 0; color: var(--fg); word-break: break-word; }
+.kv dd.was { color: var(--fg-faint); text-decoration: line-through;
+             text-decoration-color: var(--bad); }
+
+@media (max-width: 860px) {
+  #app { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; }
+  nav { display: flex; overflow-x: auto; padding: 0; }
+  .nav-count { display: none; }
+  .nav-item { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .nav-item[aria-current="true"] { border-left: 0; border-bottom-color: var(--signal); }
+  .view, .topbar, .upstream-bar { padding-left: 16px; padding-right: 16px; }
+  .bar-row { grid-template-columns: 96px 1fr auto; }
+  .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .kv dd { margin-bottom: 8px; }
+}

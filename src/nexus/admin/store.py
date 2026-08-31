@@ -334,3 +334,85 @@ class ControlPlaneStore:
             }
             for r in rows
         ]
+
+
+class ChangeRequestStore:
+    """Requests to loosen something. Records asking, never granting.
+
+    There is no `status` column and that is the design. Status is derived by
+    looking at what `policies/<tenant>.yaml` says *now*: if the requested
+    value is in the declared policy, the change shipped; if it is not, it is
+    still waiting. A status field somebody can click to "done" eventually
+    has a change marked complete that never happened, and this console
+    already refuses that shape of lie elsewhere -- an empty ledger is not a
+    pass, and an unchecked gate has not started passing.
+    """
+
+    def __init__(self, dsn: str, table: str = "change_request") -> None:
+        if not _IDENT.match(table):
+            raise ValueError(f"unsafe table identifier: {table!r}")
+        self.dsn = dsn
+        self.table = table
+
+    def record(
+        self,
+        tenant: str,
+        kind: str,
+        payload: str,
+        reason: str,
+        requested_by: str,
+        field: str | None = None,
+        model: str | None = None,
+        value: str | None = None,
+    ) -> int:
+        with psycopg.connect(self.dsn) as conn:
+            row = conn.execute(
+                f"INSERT INTO {self.table} (tenant, kind, field, model, value, "
+                "reason, payload, requested_by, requested_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    tenant, kind, field, model, value, reason, payload,
+                    requested_by, datetime.now(timezone.utc),
+                ),
+            ).fetchone()
+        return row[0]
+
+    def list_requests(self, declared: dict) -> list[dict]:
+        """Every request, with its status derived from the policy files."""
+        with psycopg.connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"SELECT id, tenant, kind, field, model, value, reason, payload, "
+                f"requested_by, requested_at FROM {self.table} "
+                "ORDER BY requested_at DESC"
+            ).fetchall()
+        out = []
+        for r in rows:
+            item = {
+                "id": r[0], "tenant": r[1], "kind": r[2], "field": r[3],
+                "model": r[4], "value": r[5], "reason": r[6], "payload": r[7],
+                "requested_by": r[8], "requested_at": r[9],
+            }
+            item["state"] = _shipped(item, declared) and "shipped" or "pending"
+            out.append(item)
+        return out
+
+
+def _shipped(req: dict, declared: dict) -> bool:
+    """Has this request landed in the policy files yet?
+
+    Read-only and derived on every listing, so the answer cannot drift from
+    the thing it describes.
+    """
+    policy = declared.get(req["tenant"])
+    if req["kind"] == "new_tenant":
+        return policy is not None
+    if policy is None:
+        return False
+    if req["field"] == "cross_tenant_read":
+        return req["value"] in policy.cross_tenant_read
+    if req["field"] == "substitutable_to":
+        model = policy.models.get(req["model"])
+        return model is not None and req["value"] in model.substitutable_to
+    if req["field"] == "allow_fallback":
+        return bool(policy.allow_fallback)
+    return False
