@@ -11,7 +11,7 @@
 [![Postgres](https://img.shields.io/badge/Postgres-ledger%20BIGINT-336791.svg?logo=postgresql&logoColor=white)](db/schema.sql)
 [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-fbbf24.svg)](https://langfuse.com/)
 [![CI](https://img.shields.io/badge/CI-offline%20tests-2088FF.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-310%20passed-brightgreen.svg)](#-评测)
+[![tests](https://img.shields.io/badge/tests-315%20passed-brightgreen.svg)](#-评测)
 [![tenant edits](https://img.shields.io/badge/tenant%20repo%20edits-0%20lines-brightgreen.svg)](#-零侵入契约)
 [![gates](https://img.shields.io/badge/gates-G1%E2%80%93G4%20exit%202-brightgreen.svg)](#-评测)
 
@@ -159,16 +159,29 @@ make install                            # = pip install -e '.[dev]'，离线跑�
 # .venv/bin/pip install -e '.[dev,llm,pg]'
 
 # 2. 跑测试（离线、hermetic、零 key）
-make test                               # 310 passed, 9 skipped
+make test                               # 315 passed, 9 skipped
 
 # 3. 跑四道硬门
 make eval                               # 打印证据条数 + 逐门 passed/FAILED/no evidence
 make eval-delivery                      # 交付用：判空也算失败，不只是违规才算
 .venv/bin/python -m nexus.eval --fail-demo g1   # ……以及它真能红的证明
 
-# 4. 启动网关 + 控制台
+# 4. 发租户 key —— 控制台每块面板都要鉴权，没有这一步它是空白的
+cp .env.example .env
+# key 由你自己定，nexus 只做等值比对，不校验格式。开发期用可读的名字：
+for t in HELPMATE SHOPSCOUT WEALTHWISE AURA WUWORK; do
+  l=$(echo $t | tr A-Z a-z)
+  sed -i '' "s|^NEXUS_KEY_$t=$|NEXUS_KEY_$t=dev-$l|" .env
+done
+
+# 5. 启动网关 + 控制台（make run 会把 .env 载进进程环境）
 make run                                # → http://localhost:8000/console?key=dev-wuwork
 ```
+
+> 第 4 步不是可选的。空 key **不建索引**（见下方「凭据」），所以 `.env.example` 原样复制过来
+> 的话 `key_index` 是空的，**任何** key 都会被 401 拒绝——控制台照常出现，五块面板全空。
+> 用 `dev-wuwork` 是因为只有它的 policy 带 `cross_tenant_read`，能看见全部五个租户；
+> 换成 `dev-helpmate` 打开同一个页面，scope 行会如实缩到 `helpmate` 一个。
 
 接真实供应商（**显式 opt-in**）：
 
@@ -189,7 +202,7 @@ docker compose up --build               # db + nexus，DATABASE_URL 已接线，
 # 或本机 Postgres（与其余五个项目同结构同端口）：
 createdb nexus && psql nexus -f db/schema.sql
 export DATABASE_URL=postgresql://nexus:nexus@localhost:5432/nexus
-make test-live                          # 316 passed, 3 skipped
+make test-live                          # 321 passed, 3 skipped
 ```
 
 镜像在构建时跑自己的整套测试。让测试阶段成为**门**而不是旁支的是最后那一行 `COPY --from=test /build/.tests-passed`——Docker 只构建被依赖的阶段，没有这个 COPY，测试可以整个被跳过而镜像照样打出 tag。**那个标记文件只在 pytest 退出 0 时存在。**
@@ -268,7 +281,7 @@ G4: passed
 
 G2 那个 `no evidence` 不是回退，是**把一直存在的空洞标出来**。它需要「上游说自己收了多少」，而 nexus 不接任何供应商的账单 API——网关进程一退出，这半边证据就没了。过去它照样打印 `passed`，因为空账本对空账单永远自洽。
 
-单测：**310 passed, 9 skipped**（离线）／**316 passed, 3 skipped**（接 Postgres）。48 个测试模块、`src/` 3623 行。
+单测：**315 passed, 9 skipped**（离线）／**321 passed, 3 skipped**（接 Postgres）。48 个测试模块、`src/` 3623 行。
 
 ### 一条原则
 
@@ -568,7 +581,7 @@ nexus/
 ├── db/schema.sql               # ledger_entry(BIGINT) + cross_tenant_read_audit
 ├── docs/                       # integration-helpmate / -shopscout / wuwork
 ├── scripts/verify_tenant.py    # 零侵入校验：跑前跑后各验一次租户仓
-├── tests/                      # 49 个文件，310 passed / 9 skipped
+├── tests/                      # 49 个文件，315 passed / 9 skipped
 ├── .github/workflows/ci.yml    # 只跑离线，刻意不跑 live
 ├── Dockerfile                  # 两阶段；COPY --from=test 让测试成为门
 └── docker-compose.yml

@@ -36,5 +36,16 @@ eval-delivery:
 wuwork-eval:
 	$(PY) -m tenants.wuwork.eval
 
+# Sources .env, unlike `test`. The asymmetry it removes is the confusing one:
+# Settings reads .env through pydantic, so DATABASE_URL and UPSTREAM written
+# there already take effect -- but `build_key_index` reads os.environ, so
+# NEXUS_KEY_* written in the same file silently did not. A dev server that
+# honours four of a file's six settings has no key index, refuses every
+# request with 401, and the console it serves comes up blank with no clue why.
+#
+# This does not weaken the rule that reaching real providers must be typed:
+# UPSTREAM defaults to "fake" and only .env or the shell can say otherwise,
+# which was already true before this line.
+# .env is gitignored, so a fresh clone has none and must still start.
 run:
-	$(PY) -m uvicorn nexus.app:app --reload
+	set -a; [ ! -f .env ] || . ./.env; set +a; $(PY) -m uvicorn nexus.app:app --reload
