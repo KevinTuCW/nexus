@@ -73,6 +73,51 @@ def test_the_page_states_which_tenants_it_covers(client):
     assert "d.scope.join" in page
 
 
+def test_the_banner_does_not_claim_real_providers_by_default(client):
+    # The banner used to read `upstream === "fake" ? warn : "real providers"`,
+    # so every value it did not recognise -- including the `undefined` an
+    # unauthenticated page gets -- rendered as "reaching real providers" over
+    # a gateway running UPSTREAM=fake. A safety banner has to fail closed:
+    # "reaching real providers" may only be reached from a known real
+    # upstream, never from an else branch.
+    page = client.get("/console").text
+    assert "REAL.includes(m.upstream)" in page
+    assert "无法确认这是真上游还是假上游" in page
+
+
+def test_the_banner_reports_a_failed_mode_lookup(client):
+    # An unreachable or refused /console/mode must leave the banner saying so,
+    # not silently keeping whatever it last claimed.
+    page = client.get("/console").text
+    assert "UPSTREAM = 未知" in page
+
+
+def test_panels_distinguish_no_rows_from_no_answer(client):
+    # `r.json()` parses a 401 body happily, so the old one-line `get` turned
+    # every refused panel into an empty table -- indistinguishable from a
+    # tenant that spent nothing, which is the exact misreading the scope line
+    # elsewhere on this page exists to prevent.
+    page = client.get("/console").text
+    assert "if (!r.ok)" in page
+    assert 'fail("costs"' in page
+    assert 'fail("quota"' in page
+
+
+def test_the_page_says_a_key_is_required_when_none_was_given(client):
+    # Opening /console with no ?key= is the overwhelmingly common way to land
+    # on a blank screen. The page has to name that cause and the fix rather
+    # than leaving it to be found in devtools.
+    page = client.get("/console").text
+    assert "/console?key=" in page
+    assert "NEXUS_KEY_" in page
+
+
+def test_the_scope_line_retracts_when_costs_fail(client):
+    # Left reading "scope: …" above a failed panel, the line is still making
+    # a claim about which tenants the screen covers.
+    assert "scope: 未知" in client.get("/console").text
+
+
 def test_the_page_explains_an_over_budget_tenant(client):
     # `over_budget` next to a number is a status; the tooltip is where it
     # says traffic is being refused right now. Same shape of assertion as

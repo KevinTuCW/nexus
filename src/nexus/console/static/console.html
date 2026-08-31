@@ -21,8 +21,16 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
           padding:12px 18px 20px; }
   .unit { color:var(--dim); font-size:12px; }
+  .alert { border:1px solid var(--bad); border-radius:4px; color:var(--bad);
+           padding:10px 14px; margin-bottom:18px; }
+  .err { color:var(--bad); }
 </style>
 <div id="banner" class="banner">loading…</div>
+<!-- Why the panels below are empty, when they are empty for a reason other
+     than "nothing happened". Stated once, at the top, in words that name the
+     next action -- a reader who has to open devtools to find out that the
+     screen is unauthenticated has been told nothing by the screen. -->
+<div id="alert" class="alert" hidden></div>
 <!-- Which tenants this screen covers. A view silently missing a business
      line looks exactly like a group where that line spent nothing, so the
      answer is stated rather than left to be inferred from the rows. -->
@@ -40,20 +48,87 @@ const H = { Authorization: "Bearer " + KEY };
 // Six decimals, because one token of a $0.60/1M model costs 0.0000006 USD.
 // Rounding to cents here would render every honest figure as 0.00.
 const usd = n => "$" + (n / 1e9).toFixed(6);
-const get = p => fetch(p, { headers: H }).then(r => r.json());
+
+// Every panel here authenticates, so every panel can be refused -- and a
+// refused panel and an idle tenant used to render the identical empty table.
+// That is the failure this file argues against everywhere else: the scope
+// line exists precisely so a missing business line cannot be misread as one
+// that spent nothing, and then a 401 was allowed to do exactly that five
+// times over. `r.json()` on a 401 body parses happily, so the old one-liner
+// reported no error, drew no row, and left the page looking calm and settled.
+async function get(p) {
+  let r;
+  try {
+    r = await fetch(p, { headers: H });
+  } catch (e) {
+    throw new Error(`${p} — 网络不可达（网关没在跑？）`);
+  }
+  if (!r.ok) {
+    const detail = await r.json().then(b => b.detail).catch(() => r.statusText);
+    throw new Error(`${p} — HTTP ${r.status}: ${detail}`);
+  }
+  return r.json();
+}
+
+// Overwhelmingly the reason this page comes up blank is that it was opened
+// as /console with no key, so that case gets the sentence naming the fix
+// rather than a generic one naming the symptom.
+const HINT = KEY
+  ? "面板加载失败。key 是否对应某个租户？授权范围见各租户 policy 的 cross_tenant_read。"
+  : "未提供 API key —— 这一屏的每块面板都要鉴权。用 /console?key=<租户 API key> 打开；" +
+    "key 取自各 policy 的 api_key_env（NEXUS_KEY_*），且必须在网关进程的环境里非空。";
+
+// The top-of-page explanation, written once. Six panels failing for one
+// reason should say that reason once, not six times in six tables.
+let alerted = false;
+function note(msg) {
+  if (alerted) return;
+  alerted = true;
+  const a = document.getElementById("alert");
+  a.textContent = msg;
+  a.hidden = false;
+}
 
 function table(el, cols, rows) {
   el.innerHTML = "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
     rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
 }
 
+// A panel that could not load says so in its own body. Distinguishing "no
+// rows" from "no answer" is the whole point; leaving it to the top alert
+// would leave five tables still claiming, by their emptiness, that they had
+// looked and found nothing.
+function fail(id, err) {
+  document.getElementById(id).innerHTML =
+    `<tr><td class="err">未能加载 · ${err.message}</td></tr>`;
+  note(HINT);
+}
+
+// Fails closed, which for this banner is the only defensible direction.
+// The previous shape was `upstream === "fake" ? warn : "reaching real
+// providers"`, so every value it did not recognise took the reassuring
+// branch -- including the `undefined` an unauthenticated page gets back.
+// The one component whose stated job is "nobody reads a demo as production"
+// was printing "reaching real providers" over a gateway configured with
+// UPSTREAM=fake. Unknown is now its own outcome, and it is red.
+const REAL = ["litellm"];
 get("/console/mode").then(m => {
   const b = document.getElementById("banner");
-  b.textContent = "UPSTREAM = " + m.upstream +
-    (m.upstream === "fake"
-      ? "  ·  这些数字来自假上游，不是真实支出"
-      : "  ·  reaching real providers");
-  if (m.upstream === "fake") b.classList.add("fake");
+  if (m.upstream === "fake") {
+    b.textContent = "UPSTREAM = fake  ·  这些数字来自假上游，不是真实支出";
+    b.classList.add("fake");
+  } else if (REAL.includes(m.upstream)) {
+    b.textContent = "UPSTREAM = " + m.upstream + "  ·  reaching real providers";
+  } else {
+    b.textContent = "UPSTREAM = " + m.upstream +
+      "  ·  无法确认这是真上游还是假上游，别把这些数字当账单";
+    b.classList.add("fake");
+  }
+}).catch(err => {
+  const b = document.getElementById("banner");
+  b.textContent = "UPSTREAM = 未知  ·  " + err.message;
+  b.classList.add("fake");
+  note(HINT);
 });
 
 get("/console/costs").then(d => {
@@ -63,6 +138,11 @@ get("/console/costs").then(d => {
   table(document.getElementById("costs"),
     [["tenant", r => r[0]], ["spend", r => usd(r[1])]],
     Object.entries(d.by_tenant));
+}).catch(err => {
+  // The scope line has to retract too. Left reading "scope: …" above an
+  // error it would still be making a claim about coverage.
+  document.getElementById("scope").textContent = "scope: 未知 —— 面板未能加载";
+  fail("costs", err);
 });
 
 get("/console/routing").then(d => {
@@ -74,7 +154,7 @@ get("/console/routing").then(d => {
     [["", r => r.vetoed ? "<span class='veto'>VETO</span>" : ""],
      ["tenant", r => r.tenant], ["requested", r => r.requested],
      ["routed", r => r.routed], ["reason", r => r.reason]], ev);
-});
+}).catch(err => fail("routing", err));
 
 get("/console/gates").then(d => table(
   document.getElementById("gates"),
@@ -82,12 +162,13 @@ get("/console/gates").then(d => table(
    ["state", r => `<span class="${r.state}" title="${
       r.state === "not_covered" ? "没有 baseline —— 这不是通过，是没人检查过" : ""
     }">${r.state}</span>`]],
-  d.tenants));
+  d.tenants)).catch(err => fail("gates", err));
 
 get("/console/fallbacks").then(d => table(
   document.getElementById("fallbacks"),
   [["call", r => r.call_id], ["tenant", r => r.tenant],
-   ["from", r => r.from], ["to", r => r.to]], d.events));
+   ["from", r => r.from], ["to", r => r.to]], d.events))
+  .catch(err => fail("fallbacks", err));
 
 get("/console/quota").then(d => table(
   document.getElementById("quota"),
@@ -96,5 +177,6 @@ get("/console/quota").then(d => table(
    ["state", r => `<span class="${r.state}" title="${
       r.state === "over_budget" ? "当日预算已用尽 —— 新请求正在被 429 拒绝"
       : r.state === "switched_off" ? "预算 0 表示关停，不是无限" : ""
-    }">${r.state}</span>`]], d.tenants));
+    }">${r.state}</span>`]], d.tenants))
+  .catch(err => fail("quota", err));
 </script>
