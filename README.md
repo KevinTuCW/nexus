@@ -11,7 +11,7 @@
 [![Postgres](https://img.shields.io/badge/Postgres-ledger%20BIGINT-336791.svg?logo=postgresql&logoColor=white)](db/schema.sql)
 [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-fbbf24.svg)](https://langfuse.com/)
 [![CI](https://img.shields.io/badge/CI-offline%20tests-2088FF.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-315%20passed-brightgreen.svg)](#-评测)
+[![tests](https://img.shields.io/badge/tests-353%20passed-brightgreen.svg)](#-评测)
 [![tenant edits](https://img.shields.io/badge/tenant%20repo%20edits-0%20lines-brightgreen.svg)](#-零侵入契约)
 [![gates](https://img.shields.io/badge/gates-G1%E2%80%93G4%20exit%202-brightgreen.svg)](#-评测)
 
@@ -159,7 +159,7 @@ make install                            # = pip install -e '.[dev]'，离线跑�
 # .venv/bin/pip install -e '.[dev,llm,pg]'
 
 # 2. 跑测试（离线、hermetic、零 key）
-make test                               # 315 passed, 9 skipped
+make test                               # 353 passed, 14 skipped
 
 # 3. 跑四道硬门
 make eval                               # 打印证据条数 + 逐门 passed/FAILED/no evidence
@@ -202,7 +202,7 @@ docker compose up --build               # db + nexus，DATABASE_URL 已接线，
 # 或本机 Postgres（与其余五个项目同结构同端口）：
 createdb nexus && psql nexus -f db/schema.sql
 export DATABASE_URL=postgresql://nexus:nexus@localhost:5432/nexus
-make test-live                          # 321 passed, 3 skipped
+make test-live                          # 364 passed, 3 skipped
 ```
 
 镜像在构建时跑自己的整套测试。让测试阶段成为**门**而不是旁支的是最后那一行 `COPY --from=test /build/.tests-passed`——Docker 只构建被依赖的阶段，没有这个 COPY，测试可以整个被跳过而镜像照样打出 tag。**那个标记文件只在 pytest 退出 0 时存在。**
@@ -281,7 +281,7 @@ G4: passed
 
 G2 那个 `no evidence` 不是回退，是**把一直存在的空洞标出来**。它需要「上游说自己收了多少」，而 nexus 不接任何供应商的账单 API——网关进程一退出，这半边证据就没了。过去它照样打印 `passed`，因为空账本对空账单永远自洽。
 
-单测：**315 passed, 9 skipped**（离线）／**321 passed, 3 skipped**（接 Postgres）。48 个测试模块、`src/` 3623 行。
+单测：**353 passed, 14 skipped**（离线）／**364 passed, 3 skipped**（接 Postgres）。52 个测试模块、`src/` 4213 行。
 
 ### 一条原则
 
@@ -581,7 +581,7 @@ nexus/
 ├── db/schema.sql               # ledger_entry(BIGINT) + cross_tenant_read_audit
 ├── docs/                       # integration-helpmate / -shopscout / wuwork
 ├── scripts/verify_tenant.py    # 零侵入校验：跑前跑后各验一次租户仓
-├── tests/                      # 49 个文件，315 passed / 9 skipped
+├── tests/                      # 52 个文件，353 passed / 14 skipped
 ├── .github/workflows/ci.yml    # 只跑离线，刻意不跑 live
 ├── Dockerfile                  # 两阶段；COPY --from=test 让测试成为门
 └── docker-compose.yml
@@ -637,6 +637,10 @@ models:
 - ✅ **零侵入实测** —— helpmate 与 shopscout 两条真实链路打通，**租户仓改动 0 行**；第一次探针四条全挂的记录原样留在 `docs/`
 - ✅ **对 G1 的一次真实攻击** —— 放开三个 pin：权重族 3→1、账单降 91%、全部 200、零报错
 - ✅ **一次横向架构复核** —— 四条控制被写出来、被测试、画进了架构图，却没接到任何真实路径上：门在判空气 / 控制台鉴权当授权 / 预算是装饰 / 降级绕过多样性分组。全部修掉并各配证伪，见[一次架构复核](#-一次架构复核四件本该有人问的事)
+- ✅ **P4a 生效模型与凭据** —— 策略在被读取之前合成为**生效值**（覆盖只能收窄：`Override` 没有 `new_value`，放松在结构上无从表达），既有 11 个读取点一行未改；`eval.py` 一并改走同一入口，否则四道门按声明值判、网关按生效值跑，一次收紧就对门隐形；凭据索引改 `sha256 → 租户`，进程内存不再持有任何明文 key；`tenant_key` 支持签发/吊销/**无中断轮换**；`/admin` 具名管理员（不是一把共享 key），缺库或缺管理员时**不挂载**而不是挂上去全部拒绝
+- ⬜ **P4b 策略与额度控制面** —— `enabled` 执行点收口（**必须是第一件事**，见下一条）、`policy_override`、`tenant_budget` 与阈值分级、热生效原地替换、回滚、乐观并发、`admin_action` 审计
+- ⬜ **P4c 控制面界面** —— 四块面板、提案 diff、提案跑门举证、孤儿覆盖检测
+- ⬜ **`enabled` 还没接上执行点** —— P4a 引入了这个字段，但目前没有任何东西能把它设成 False，也没有任何路径会因它拒绝请求。**它现在是个惰性字段**，而这个仓刚在上一次架构复核里数落过四条一模一样的东西：写出来、测过、画进架构图，却没接到任何真实路径上。P4b 的第一个 Task 修它
 - ⬜ **审计落库** —— 表已建、代码未写。**在此之前审计只活到下次重启**，见[诚实的留白](#审计只活到下次重启)
 - ⬜ **对账接供应商账单 API** —— 现在拿供应商自己的响应对账，等于账本跟自己对账。真正独立的信源是账单 API。**在那之前 G2 对着真账本报的是 `no evidence`**，嵌入行的对账证据也一并缺着
 - ⬜ **G3 live 臂进 CI** —— 需要凭据与时间预算；直接塞进现有 CI 会得到一个「缺 secret 就红」的流水线，而那种流水线一周内就会被加 `continue-on-error`
