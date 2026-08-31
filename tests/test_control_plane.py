@@ -445,3 +445,92 @@ def test_an_orphan_override_is_listed_not_cleaned(client):
         for t in body["tenants"]
         for o in t["overrides_in_force"]
     )
+
+
+# --- administrators over HTTP --------------------------------------------
+
+
+def test_a_logged_in_admin_can_create_another(client):
+    # The *first* administrator still cannot be made this way -- there is no
+    # session to authenticate. Subsequent ones have no bootstrap window:
+    # somebody already authenticated is vouching.
+    r = client.post(
+        "/admin/accounts",
+        json={"username": "new-op", "password": "another-long-password", "role": "ro"},
+    )
+    assert r.status_code == 200
+    names = {a["username"] for a in client.get("/admin/accounts").json()["accounts"]}
+    assert "new-op" in names
+
+
+def test_creating_an_admin_with_a_short_password_is_refused(client):
+    r = client.post(
+        "/admin/accounts", json={"username": "weak", "password": "short", "role": "rw"}
+    )
+    assert r.status_code == 400
+
+
+def test_an_admin_cannot_disable_itself(client):
+    # That would lock the last administrator out with no way back in.
+    r = client.post("/admin/accounts/kevin/disable")
+    assert r.status_code == 400
+
+
+def test_the_account_listing_never_carries_a_hash(client):
+    blob = str(client.get("/admin/accounts").json())
+    assert "password_hash" not in blob and "salt" not in blob
+
+
+def test_a_readonly_admin_cannot_create_accounts(client):
+    login(client, "ops-li")
+    r = client.post(
+        "/admin/accounts",
+        json={"username": "x", "password": "another-long-password", "role": "rw"},
+    )
+    assert r.status_code == 403
+
+
+# --- creating a tenant is a proposal, not a write -------------------------
+
+
+def test_creating_a_tenant_produces_a_file_not_a_row(client):
+    before = {t["tenant"] for t in client.get("/admin/tenants").json()["tenants"]}
+    r = client.post(
+        "/admin/proposals/tenant",
+        json={"tenant": "newline", "integration": "zero_touch",
+              "gate_command": "make eval", "budget_nanousd_per_day": 5},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == "policies/newline.yaml"
+    assert "tenant: newline" in body["diff"]
+    # Nothing was created.
+    after = {t["tenant"] for t in client.get("/admin/tenants").json()["tenants"]}
+    assert after == before
+
+
+def test_a_proposed_tenant_starts_closed(client):
+    # No models, no cross-tenant grants, fallback off. A tenant that arrives
+    # with permissions already granted is a tenant nobody reviewed.
+    diff = client.post(
+        "/admin/proposals/tenant",
+        json={"tenant": "newline", "budget_nanousd_per_day": 5},
+    ).json()["diff"]
+    assert "cross_tenant_read" not in diff
+    assert "models" not in diff
+    assert "allow_fallback: false" in diff
+
+
+def test_proposing_a_tenant_that_already_exists_is_refused(client):
+    r = client.post("/admin/proposals/tenant", json={"tenant": "wuwork"})
+    assert r.status_code == 409
+
+
+def test_the_new_tenant_proposal_does_not_claim_the_gates_passed(client):
+    # An unbuilt tenant has no ledger rows, so the gates have judged nothing.
+    # Saying "clean" here would be the empty-ledger lie in a new place.
+    body = client.post(
+        "/admin/proposals/tenant", json={"tenant": "newline"}
+    ).json()
+    assert body["gates"]["verdict"] == "not_applicable"
+    assert "verify_tenant" in body["gates"]["detail"]

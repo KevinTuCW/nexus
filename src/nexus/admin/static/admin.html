@@ -1,345 +1,939 @@
 <!doctype html>
+<html lang="zh-CN">
 <meta charset="utf-8">
-<title>nexus · control plane</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nexus · 控制面</title>
+
+<!--
+  Instrument-panel discipline: strict monospace, hairline rules, one signal
+  colour. Amber means exactly one thing on every screen -- "this differs from
+  what the policy file declares" -- so a scan of the console answers "what did
+  somebody change" without reading a word.
+
+  No webfonts. This repository is offline-first, and a control plane that
+  fetches from fonts.googleapis.com both breaks that and tells a third party
+  each time somebody opens it. The hierarchy comes from size, weight, tracking
+  and colour instead.
+-->
 <style>
-  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#c9d1d9;
-          --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
-          --none:#6e7681; }
-  body { background:var(--bg); color:var(--fg); font:14px/1.6 ui-monospace,monospace;
-         margin:0; padding:24px; }
-  h2 { font-size:13px; letter-spacing:1px; color:var(--dim); margin:24px 0 8px; }
-  table { border-collapse:collapse; width:100%; }
-  td,th { border-bottom:1px solid var(--line); padding:6px 10px; text-align:left;
-          vertical-align:top; }
-  th { color:var(--dim); font-weight:400; }
-  .banner { padding:10px 14px; border:1px solid var(--line); border-radius:4px;
-            margin-bottom:18px; }
-  .banner.ro { border-color:var(--warn); color:var(--warn); }
-  .alert { border:1px solid var(--bad); border-radius:4px; color:var(--bad);
-           padding:10px 14px; margin-bottom:18px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
-          padding:12px 18px 20px; margin-bottom:18px; }
-  .active,.clean{color:var(--ok)} .revoked,.lifted,.off{color:var(--none)}
-  .in_force,.would_violate{color:var(--bad)} .no_evidence{color:var(--warn)}
-  .err { color:var(--bad); }
-  .dim { color:var(--dim); }
-  .narrowed { color:var(--warn); }
-  button { background:#21262d; color:var(--fg); border:1px solid var(--line);
-           border-radius:4px; padding:3px 10px; font:inherit; cursor:pointer; }
-  button:disabled { color:var(--none); cursor:not-allowed; }
-  input,select { background:#0d1117; color:var(--fg); border:1px solid var(--line);
-                 border-radius:4px; padding:3px 8px; font:inherit; }
-  pre { background:#0d1117; border:1px solid var(--line); border-radius:4px;
-        padding:10px; overflow:auto; white-space:pre-wrap; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+:root {
+  --bg: #0a0c10;
+  --bg-rail: #070809;
+  --panel: #10141b;
+  --panel-2: #151a23;
+  --line: #1e2530;
+  --line-bright: #2c3542;
+  --fg: #d7dee8;
+  --fg-dim: #7d8899;
+  --fg-faint: #4a5462;
+  --signal: #e0a33e;
+  --signal-dim: #4a3a1c;
+  --ok: #4bb87a;
+  --bad: #e05252;
+  --info: #4b9fd4;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --rail: 232px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/1.65 var(--mono);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+/* Atmosphere: two very low-opacity washes plus a fine grain, so the surface
+   reads as a lit panel rather than a flat fill. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 500px at 12% -10%, rgba(224,163,62,.055), transparent 70%),
+    radial-gradient(700px 600px at 100% 100%, rgba(75,159,212,.045), transparent 70%);
+}
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  opacity: .035; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ─────────────────────────── login ─────────────────────────── */
+
+#login {
+  position: fixed; inset: 0; z-index: 10;
+  display: grid; place-items: center; padding: 24px;
+}
+.login-card {
+  width: min(420px, 100%); position: relative;
+  background: linear-gradient(180deg, var(--panel) 0%, #0c1015 100%);
+  border: 1px solid var(--line-bright);
+  box-shadow: 0 40px 80px -30px #000, 0 0 0 1px rgba(255,255,255,.02) inset;
+  animation: rise .5s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+/* A signal strip along the top edge -- the one piece of colour on the page. */
+.login-card::before {
+  content: ""; position: absolute; top: -1px; left: -1px; right: -1px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--signal) 30%, var(--info) 70%, transparent);
+  animation: sweep 3.5s ease-in-out infinite;
+}
+@keyframes sweep { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+
+.login-head { padding: 30px 30px 22px; border-bottom: 1px solid var(--line); }
+.wordmark {
+  font-size: 26px; font-weight: 600; letter-spacing: .24em;
+  margin: 0 0 6px; color: var(--fg);
+}
+.wordmark b { color: var(--signal); font-weight: 600; }
+.login-sub { margin: 0; color: var(--fg-dim); font-size: 11px; letter-spacing: .16em; }
+.login-body { padding: 26px 30px 30px; }
+
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-size: 10px; letter-spacing: .18em;
+  color: var(--fg-faint); margin-bottom: 7px;
+}
+input, select, textarea {
+  width: 100%; background: #080a0e; color: var(--fg);
+  border: 1px solid var(--line-bright); border-radius: 0;
+  padding: 9px 11px; font: inherit; font-variant-numeric: tabular-nums;
+  transition: border-color .15s, box-shadow .15s;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--signal);
+  box-shadow: 0 0 0 3px rgba(224,163,62,.1);
+}
+input::placeholder { color: var(--fg-faint); }
+
+button {
+  background: transparent; color: var(--fg); font: inherit;
+  border: 1px solid var(--line-bright); border-radius: 0;
+  padding: 8px 16px; cursor: pointer; letter-spacing: .08em;
+  transition: background .15s, border-color .15s, color .15s;
+}
+button:hover:not(:disabled) { border-color: var(--signal); color: var(--signal); }
+button:disabled { color: var(--fg-faint); cursor: not-allowed; border-color: var(--line); }
+button.primary {
+  width: 100%; padding: 11px; border-color: var(--signal);
+  color: var(--signal); background: rgba(224,163,62,.06); letter-spacing: .2em;
+}
+button.primary:hover:not(:disabled) { background: rgba(224,163,62,.14); }
+button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+button.tiny { padding: 3px 9px; font-size: 11px; }
+
+.login-err {
+  min-height: 18px; margin: 12px 0 0; font-size: 11px; color: var(--bad);
+}
+.login-foot {
+  margin: 20px 0 0; padding-top: 16px; border-top: 1px solid var(--line);
+  color: var(--fg-faint); font-size: 11px; line-height: 1.8;
+}
+.login-foot code { color: var(--fg-dim); }
+
+/* ─────────────────────────── shell ─────────────────────────── */
+
+#app { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 100vh;
+       position: relative; z-index: 1; }
+
+.rail {
+  background: var(--bg-rail); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+}
+.rail-head { padding: 22px 20px 18px; border-bottom: 1px solid var(--line); }
+.rail-head .wordmark { font-size: 17px; letter-spacing: .2em; margin: 0; }
+.rail-head .login-sub { margin-top: 5px; font-size: 9px; }
+
+nav { padding: 12px 0; flex: 1; overflow-y: auto; }
+.nav-group {
+  font-size: 9px; letter-spacing: .2em; color: var(--fg-faint);
+  padding: 14px 20px 7px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 20px; border: 0; background: none; text-align: left;
+  color: var(--fg-dim); cursor: pointer; letter-spacing: .04em;
+  border-left: 2px solid transparent; transition: color .12s, background .12s;
+}
+.nav-item:hover { color: var(--fg); background: rgba(255,255,255,.02); border-color: transparent; }
+.nav-item[aria-current="true"] {
+  color: var(--signal); background: rgba(224,163,62,.07);
+  border-left-color: var(--signal);
+}
+.nav-item .k { font-size: 10px; color: var(--fg-faint); width: 12px; }
+.nav-item[aria-current="true"] .k { color: var(--signal); }
+.nav-count {
+  margin-left: auto; font-size: 10px; color: var(--fg-faint);
+  border: 1px solid var(--line); padding: 0 5px;
+}
+
+.rail-foot { padding: 14px 20px; border-top: 1px solid var(--line); font-size: 11px; }
+.who { color: var(--fg); margin-bottom: 2px; }
+.who .role { color: var(--signal); }
+.who .role.ro { color: var(--info); }
+
+main { padding: 0 0 60px; min-width: 0; }
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 20px 30px 16px; border-bottom: 1px solid var(--line);
+  background: rgba(10,12,16,.92); backdrop-filter: blur(8px);
+}
+.topbar h1 { font-size: 15px; font-weight: 600; letter-spacing: .16em; margin: 0; }
+.topbar .hint { color: var(--fg-dim); font-size: 11px; }
+.view { padding: 24px 30px; animation: fade .3s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } }
+
+/* ─────────────────────────── pieces ─────────────────────────── */
+
+.panel { border: 1px solid var(--line); background: var(--panel); margin-bottom: 22px; }
+.panel-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+}
+.panel-head h2 { font-size: 11px; letter-spacing: .18em; color: var(--fg-dim);
+                 margin: 0; font-weight: 500; }
+.panel-head .spacer { flex: 1; }
+.panel-body { padding: 18px; }
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; font-weight: 500; font-size: 10px; letter-spacing: .16em;
+  color: var(--fg-faint); padding: 9px 14px; border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr { transition: background .12s; }
+tbody tr:hover { background: rgba(255,255,255,.018); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num { text-align: right; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; opacity: .35;
+               transition: opacity .12s; }
+tr:hover .row-actions { opacity: 1; }
+
+.tag {
+  display: inline-block; font-size: 10px; letter-spacing: .1em;
+  padding: 1px 7px; border: 1px solid var(--line-bright); color: var(--fg-dim);
+}
+.tag.on { color: var(--ok); border-color: rgba(75,184,122,.4); }
+.tag.off { color: var(--fg-faint); }
+.tag.amber { color: var(--signal); border-color: rgba(224,163,62,.45);
+             background: rgba(224,163,62,.07); }
+.tag.bad { color: var(--bad); border-color: rgba(224,82,82,.45); }
+.tag.info { color: var(--info); border-color: rgba(75,159,212,.4); }
+
+/* Amber = differs from the declared file. One meaning, every screen. */
+.narrowed { color: var(--signal); }
+.struck { color: var(--fg-faint); text-decoration: line-through;
+          text-decoration-color: var(--bad); }
+.dim { color: var(--fg-dim); }
+.faint { color: var(--fg-faint); }
+.err { color: var(--bad); }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+             gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.stat { background: var(--panel); padding: 16px 18px; }
+.stat .l { font-size: 10px; letter-spacing: .16em; color: var(--fg-faint); }
+.stat .v { font-size: 26px; margin-top: 6px; letter-spacing: -.01em; }
+.stat .v.amber { color: var(--signal); }
+.stat .v.ok { color: var(--ok); }
+.stat .s { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
+
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+             gap: 14px; align-items: end; }
+.note {
+  border-left: 2px solid var(--signal); background: rgba(224,163,62,.05);
+  padding: 11px 14px; color: var(--fg-dim); font-size: 11.5px; line-height: 1.7;
+  margin-bottom: 18px;
+}
+.note.bad { border-color: var(--bad); background: rgba(224,82,82,.05); }
+.note b { color: var(--fg); font-weight: 600; }
+
+pre {
+  background: #070a0e; border: 1px solid var(--line); padding: 14px;
+  overflow: auto; font-size: 12px; line-height: 1.6; margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+pre .add { color: var(--ok); }
+pre .del { color: var(--bad); }
+pre .hd { color: var(--info); }
+
+#toast {
+  position: fixed; right: 24px; bottom: 24px; z-index: 40;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+}
+.toast {
+  background: var(--panel-2); border: 1px solid var(--line-bright);
+  border-left: 2px solid var(--ok); padding: 11px 16px; max-width: 460px;
+  box-shadow: 0 20px 40px -18px #000; animation: slide .28s cubic-bezier(.2,.8,.2,1) both;
+  font-size: 12px;
+}
+.toast.bad { border-left-color: var(--bad); color: var(--bad); }
+@keyframes slide { from { opacity: 0; transform: translateX(16px); } }
+
+.secret {
+  background: #070a0e; border: 1px dashed var(--signal); padding: 14px;
+  display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+}
+.secret code { flex: 1; color: var(--signal); word-break: break-all; font-size: 12px; }
+.empty { padding: 30px; text-align: center; color: var(--fg-faint); font-size: 12px; }
+[hidden] { display: none !important; }
+
+@media (max-width: 860px) {
+  #app { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; }
+  nav { display: flex; overflow-x: auto; padding: 0; }
+  .nav-group, .nav-count { display: none; }
+  .nav-item { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .nav-item[aria-current="true"] { border-left: 0; border-bottom-color: var(--signal); }
+}
 </style>
 
-<!-- The login form is the page shell. Nothing below it is fetched until a
-     session exists, so serving this anonymously gives away nothing but the
-     surface's own existence. The credential never travels in the URL. -->
-<div id="login" class="card" hidden>
-  <h2>CONTROL PLANE · 登录</h2>
-  <form id="login-form" class="row" autocomplete="on">
-    <input id="u" name="username" placeholder="用户名" autocomplete="username">
-    <input id="p" name="password" type="password" placeholder="密码"
-           autocomplete="current-password">
-    <button type="submit">登录</button>
-  </form>
-  <p id="login-err" class="err"></p>
-  <p class="dim">账号由命令行创建，不经过网络：<code>make admin-add USER=&lt;name&gt;</code></p>
+<!-- The login form is the page shell: serving it anonymously gives away
+     nothing but the surface's own existence, and the credential never
+     travels in the URL. -->
+<div id="login" hidden>
+  <div class="login-card">
+    <div class="login-head">
+      <h1 class="wordmark">NE<b>X</b>US</h1>
+      <p class="login-sub">万尔玛集团 AI 中台 · 控制面</p>
+    </div>
+    <div class="login-body">
+      <form id="login-form" autocomplete="on">
+        <div class="field">
+          <label for="u">管理员</label>
+          <input id="u" name="username" autocomplete="username" autofocus>
+        </div>
+        <div class="field">
+          <label for="p">密码</label>
+          <input id="p" name="password" type="password" autocomplete="current-password">
+        </div>
+        <button class="primary" type="submit">登 录</button>
+      </form>
+      <p class="login-err" id="login-err"></p>
+      <p class="login-foot">
+        账号只能从命令行创建，密码不经过网络也不进任何文件：<br>
+        <code>make admin-add USER=&lt;name&gt;</code>
+      </p>
+    </div>
+  </div>
 </div>
 
 <div id="app" hidden>
-<div id="banner" class="banner">loading…</div>
-<div class="row"><button onclick="logout()">退出登录</button></div>
-<div id="alert" class="alert" hidden></div>
+  <aside class="rail">
+    <div class="rail-head">
+      <h1 class="wordmark">NE<b>X</b>US</h1>
+      <p class="login-sub">CONTROL PLANE</p>
+    </div>
+    <nav id="nav">
+      <div class="nav-group">运 营</div>
+      <button class="nav-item" data-view="overview"><span class="k">01</span>概览</button>
+      <button class="nav-item" data-view="tenants"><span class="k">02</span>租户
+        <span class="nav-count" id="n-tenants">–</span></button>
+      <button class="nav-item" data-view="keys"><span class="k">03</span>凭据
+        <span class="nav-count" id="n-keys">–</span></button>
+      <button class="nav-item" data-view="perms"><span class="k">04</span>权限</button>
+      <div class="nav-group">变 更</div>
+      <button class="nav-item" data-view="proposals"><span class="k">05</span>提案</button>
+      <button class="nav-item" data-view="audit"><span class="k">06</span>审计</button>
+      <div class="nav-group">系 统</div>
+      <button class="nav-item" data-view="admins"><span class="k">07</span>管理员
+        <span class="nav-count" id="n-admins">–</span></button>
+    </nav>
+    <div class="rail-foot">
+      <div class="who">
+        <span id="who-name">—</span> · <span class="role" id="who-role">—</span>
+      </div>
+      <button class="tiny" style="margin-top:8px" onclick="logout()">退出登录</button>
+    </div>
+  </aside>
 
-<!-- Declared and effective side by side. Either alone misleads: only the
-     effective value cannot answer "was it always so, or did somebody tighten
-     it", and only the declared value is a screen that lies about what the
-     gateway is actually doing. -->
-<div class="card"><h2>TENANTS · 声明值 vs 生效值</h2><table id="tenants"></table></div>
+  <main>
+    <div class="topbar">
+      <h1 id="view-title">概览</h1>
+      <span class="hint" id="view-hint"></span>
+    </div>
 
-<div class="card">
-  <h2>OVERRIDES · 收紧即时生效</h2>
-  <div class="row">
-    <select id="ov-tenant"></select>
-    <select id="ov-field">
-      <option value="enabled">enabled（停用租户）</option>
-      <option value="allow_fallback">allow_fallback（关降级）</option>
-      <option value="cross_tenant_read">cross_tenant_read（收回跨租户读）</option>
-      <option value="substitutable_to">substitutable_to（移除可替换族）</option>
-    </select>
-    <input id="ov-model" placeholder="model（仅 substitutable_to）" size="26">
-    <input id="ov-value" placeholder="removed_value" size="14" value="true">
-    <input id="ov-reason" placeholder="理由（必填）" size="24">
-    <button id="ov-go">收紧</button>
-  </div>
-  <table id="overrides"></table>
+    <!-- 01 概览 -->
+    <section class="view" id="v-overview" hidden>
+      <div class="stat-grid" id="stats"></div>
+      <div id="orphan-note"></div>
+      <div class="panel" style="margin-top:22px">
+        <div class="panel-head"><h2>最近变更</h2></div>
+        <table><tbody id="recent"></tbody></table>
+      </div>
+    </section>
+
+    <!-- 02 租户 -->
+    <section class="view" id="v-tenants" hidden>
+      <div class="note">
+        <b>停用</b>与<b>调低预算</b>即时生效；<b>新建租户</b>与<b>调高预算</b>会先出提案或要求复核。
+        方向决定通道——只会让更多请求被拒绝的改动才可以热生效。
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>租户</h2><span class="spacer"></span>
+          <button class="tiny" data-w onclick="go('proposals','new-tenant')">+ 新建租户</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th>租户</th><th>接入</th><th>状态</th><th class="num">日预算</th>
+            <th>降级</th><th>凭据</th><th></th>
+          </tr></thead>
+          <tbody id="t-rows"></tbody>
+        </table>
+      </div>
+      <div class="panel" id="budget-panel">
+        <div class="panel-head"><h2>调整预算 <span class="faint">nano-USD / 日</span></h2></div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div class="field"><label>租户</label><select id="b-tenant"></select></div>
+            <div class="field"><label>新预算</label><input id="b-value" placeholder="1000000000"></div>
+            <div class="field"><label>理由（必填）</label><input id="b-reason"></div>
+            <div class="field"><label>复核人（仅大幅上调）</label><input id="b-approver"></div>
+            <div><button data-w onclick="setBudget()">写入</button></div>
+          </div>
+          <p class="faint" style="margin:12px 0 0">
+            调低永远免复核，包括调到 0 止血。上调超过 2 倍或超过日均 10 USD 需要第二位管理员。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 凭据 -->
+    <section class="view" id="v-keys" hidden>
+      <div class="panel">
+        <div class="panel-head"><h2>签发凭据</h2></div>
+        <div class="panel-body">
+          <div id="new-key"></div>
+          <div class="form-grid">
+            <div class="field"><label>租户</label><select id="k-tenant"></select></div>
+            <div class="field"><label>标签（必填）</label><input id="k-label" placeholder="生产 / 轮换 2026-08"></div>
+            <div><button data-w onclick="issueKey()">签发</button></div>
+          </div>
+          <p class="faint" style="margin:12px 0 0">
+            明文只在签发时回一次，库里只有它的哈希。轮换的做法是：发新的 → 租户切换 → 吊销旧的，全程不中断。
+          </p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>已签发</h2></div>
+        <table>
+          <thead><tr><th>前缀</th><th>租户</th><th>标签</th><th>签发人</th><th>状态</th><th></th></tr></thead>
+          <tbody id="k-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 04 权限 -->
+    <section class="view" id="v-perms" hidden>
+      <div class="note">
+        这一层<b>只能收紧</b>。存储层没有「授予」这个动词——<code>policy_override</code>
+        没有 <code>new_value</code> 列，所以放宽在这里没有语法可以表达，只能走提案。
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>收紧权限 <span class="faint">即时生效</span></h2></div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div class="field"><label>租户</label><select id="ov-tenant"></select></div>
+            <div class="field"><label>字段</label>
+              <select id="ov-field" onchange="onOvField()">
+                <option value="enabled">enabled · 停用租户</option>
+                <option value="allow_fallback">allow_fallback · 关闭降级</option>
+                <option value="cross_tenant_read">cross_tenant_read · 收回跨租户读</option>
+                <option value="substitutable_to">substitutable_to · 移除可替换族</option>
+              </select>
+            </div>
+            <div class="field" id="ov-model-f" hidden><label>模型</label>
+              <select id="ov-model"></select></div>
+            <div class="field" id="ov-value-f" hidden><label>移除哪一项</label>
+              <select id="ov-value"></select></div>
+            <div class="field"><label>理由（必填）</label><input id="ov-reason"></div>
+            <div><button data-w onclick="addOverride()">收紧</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>生效中的收紧</h2></div>
+        <table>
+          <thead><tr><th>#</th><th>租户</th><th>移除了</th><th>理由</th><th>操作人</th><th></th></tr></thead>
+          <tbody id="ov-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 05 提案 -->
+    <section class="view" id="v-proposals" hidden>
+      <div class="note">
+        放松<b>没有写路径</b>。这里生成 <code>policies/&lt;tenant&gt;.yaml</code> 的 diff
+        与四道门对它的结论，由人走 review 落盘。<b>提案人在这里生成，复核人在 PR 里批准</b>——
+        四眼原则不用另造审批流，git 已经是那套流程。
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>放宽一个租户的约束</h2></div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div class="field"><label>租户</label><select id="p-tenant"></select></div>
+            <div class="field"><label>字段</label>
+              <select id="p-field">
+                <option value="cross_tenant_read">cross_tenant_read</option>
+                <option value="substitutable_to">substitutable_to</option>
+                <option value="allow_fallback">allow_fallback</option>
+              </select></div>
+            <div class="field"><label>模型（substitutable_to 用）</label><input id="p-model"></div>
+            <div class="field"><label>要加回的值</label><input id="p-value"></div>
+            <div><button onclick="propose()">生成 diff</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" id="new-tenant">
+        <div class="panel-head"><h2>新建租户</h2></div>
+        <div class="panel-body">
+          <p class="faint" style="margin:0 0 14px">
+            新建租户是一次放松——凭空多一个能花钱的主体，而它是否真的接入，
+            只有 <code>scripts/verify_tenant.py</code> 说了算：它要确认租户仓一行未改就能打通。
+            所以这里也只出 diff。一切默认关闭：无模型、无跨租户授权、降级关。
+          </p>
+          <div class="form-grid">
+            <div class="field"><label>租户名</label><input id="nt-name" placeholder="newline"></div>
+            <div class="field"><label>接入方式</label>
+              <select id="nt-integration">
+                <option value="zero_touch">zero_touch</option>
+                <option value="native">native</option>
+              </select></div>
+            <div class="field"><label>门禁命令</label><input id="nt-gate" placeholder="make eval"></div>
+            <div class="field"><label>日预算 nano-USD</label><input id="nt-budget" placeholder="1000000000"></div>
+            <div><button onclick="proposeTenant()">生成 diff</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" id="p-out" hidden>
+        <div class="panel-head">
+          <h2>提案</h2><span class="spacer"></span>
+          <span id="p-verdict"></span>
+          <button class="tiny" onclick="copyDiff()">复制 diff</button>
+        </div>
+        <div class="panel-body">
+          <p id="p-detail" class="dim" style="margin:0 0 12px"></p>
+          <pre id="p-diff"></pre>
+          <p id="p-apply" class="faint" style="margin:14px 0 0"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 06 审计 -->
+    <section class="view" id="v-audit" hidden>
+      <div class="note">
+        每一行都记着**是谁**，不是一个共享身份。追不到人的审计在任何一次真实复盘里都等于没有。
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>控制面操作</h2></div>
+        <table>
+          <thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>变化</th></tr></thead>
+          <tbody id="a-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 07 管理员 -->
+    <section class="view" id="v-admins" hidden>
+      <div class="note">
+        <b>第一个</b>管理员只能从命令行建：能自己通过 HTTP 发出第一个管理员的控制面，
+        有一个谁都能当管理员的窗口。后续的没有这个窗口——已经登录的人在为他背书。
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>新增管理员</h2></div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div class="field"><label>用户名</label><input id="ac-user"></div>
+            <div class="field"><label>密码（≥12 位）</label><input id="ac-pass" type="password"></div>
+            <div class="field"><label>角色</label>
+              <select id="ac-role"><option value="rw">rw · 可写</option><option value="ro">ro · 只读</option></select></div>
+            <div><button data-w onclick="createAccount()">创建</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>账号</h2></div>
+        <table>
+          <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>最后登录</th><th>失败次数</th><th></th></tr></thead>
+          <tbody id="ac-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
 </div>
 
-<div class="card">
-  <h2>BUDGET <span class="dim">nano-USD · 调低永不需要复核</span></h2>
-  <div class="row">
-    <select id="b-tenant"></select>
-    <input id="b-value" placeholder="nano-USD/day" size="16">
-    <input id="b-reason" placeholder="理由（必填）" size="24">
-    <input id="b-approver" placeholder="复核人（仅大幅上调需要）" size="22">
-    <button id="b-go">设置</button>
-  </div>
-</div>
-
-<div class="card">
-  <h2>KEYS <span class="dim">明文只显示一次</span></h2>
-  <div class="row">
-    <select id="k-tenant"></select>
-    <input id="k-label" placeholder="label（必填）" size="20">
-    <button id="k-go">签发</button>
-  </div>
-  <div id="k-new"></div>
-  <table id="keys"></table>
-</div>
-
-<!-- Loosening has no write path. This produces a diff and the gates' verdict;
-     a human lands it through review. -->
-<div class="card">
-  <h2>PROPOSALS · 放松只出 diff，不写库</h2>
-  <div class="row">
-    <select id="p-tenant"></select>
-    <select id="p-field">
-      <option value="substitutable_to">substitutable_to</option>
-      <option value="cross_tenant_read">cross_tenant_read</option>
-      <option value="allow_fallback">allow_fallback</option>
-    </select>
-    <input id="p-model" placeholder="model" size="26">
-    <input id="p-value" placeholder="要加回的值" size="14">
-    <button id="p-go">生成提案</button>
-  </div>
-  <div id="proposal"></div>
-</div>
-
-<div class="card"><h2>AUDIT · 谁改了什么</h2><table id="actions"></table></div>
-</div>
+<div id="toast"></div>
 
 <script>
-// No credential in this file and none in the URL. The session lives in an
-// HttpOnly cookie, which this script cannot read -- that is the point:
-// a cross-site script injected here could not exfiltrate it either.
+"use strict";
+/* No credential in this file and none in the URL. The session lives in an
+   HttpOnly cookie that this script cannot read -- which is the point: a
+   script injected here could not exfiltrate it either. */
 const H = { "Content-Type": "application/json" };
-const usd = n => "$" + (n / 1e9).toFixed(6);
-const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
-let ROLE = "ro", VERSIONS = {};
+let ROLE = "ro", DATA = { tenants: [], keys: [], actions: [], accounts: [], orphans: [] };
+let LAST_DIFF = "";
 
-// Same rule the console learned the hard way: a refused panel and an idle one
-// must not render the same empty table. Every call either returns a body or
-// raises, and every caller says so on screen.
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[<>&"]/g, c =>
+  ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+const usd = n => "$" + (Number(n) / 1e9).toFixed(6);
+
 async function api(path, opts = {}) {
   let r;
   try { r = await fetch(path, { headers: H, credentials: "same-origin", ...opts }); }
-  catch (e) { throw new Error(`${path} — 网络不可达`); }
+  catch { throw new Error("网络不可达"); }
   if (!r.ok) {
-    const detail = await r.json().then(b => b.detail).catch(() => r.statusText);
-    throw new Error(`HTTP ${r.status}: ${detail}`);
+    const d = await r.json().then(b => b.detail).catch(() => r.statusText);
+    throw new Error(d || `HTTP ${r.status}`);
   }
   return r.json();
 }
-const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
+const post = (p, b) => api(p, { method: "POST", body: JSON.stringify(b || {}) });
 
-function note(msg, ok) {
-  const a = document.getElementById("alert");
-  a.textContent = msg; a.hidden = false;
-  a.style.borderColor = ok ? "var(--ok)" : "var(--bad)";
-  a.style.color = ok ? "var(--ok)" : "var(--bad)";
-}
-function fail(id, err) {
-  document.getElementById(id).innerHTML =
-    `<tr><td class="err">未能加载 · ${esc(err.message)}</td></tr>`;
-}
-function table(el, cols, rows) {
-  el.innerHTML = "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
-    rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+function toast(msg, bad) {
+  const el = document.createElement("div");
+  el.className = "toast" + (bad ? " bad" : "");
+  el.textContent = msg;
+  $("toast").appendChild(el);
+  setTimeout(() => el.remove(), bad ? 7000 : 3500);
 }
 
-// A value the declared policy has and the effective one does not was taken
-// away by somebody. Showing what is gone, next to what remains, is the whole
-// point of this panel.
-function pair(dec, eff) {
-  const e = new Set(eff || []);
-  const gone = (dec || []).filter(x => !e.has(x));
-  const kept = (dec || []).filter(x => e.has(x));
-  return (kept.map(esc).join(", ") || '<span class="dim">—</span>') +
-    (gone.length ? ` <span class="narrowed">−${gone.map(esc).join(", ")}</span>` : "");
+/* ── views ── */
+const VIEWS = {
+  overview:  ["概览", "生效值与声明值的差异一眼可见"],
+  tenants:   ["租户", "停用与调低即时生效；新建与调高走提案或复核"],
+  keys:      ["凭据", "明文只显示一次，库里只有哈希"],
+  perms:     ["权限", "这一层只能收紧，放宽没有语法"],
+  proposals: ["提案", "生成 diff 与门的结论，不写库"],
+  audit:     ["审计", "谁在什么时候改了什么"],
+  admins:    ["管理员", "第一个只能从命令行建"],
+};
+function go(view, scrollTo) {
+  for (const k of Object.keys(VIEWS)) $("v-" + k).hidden = k !== view;
+  document.querySelectorAll(".nav-item").forEach(b =>
+    b.setAttribute("aria-current", String(b.dataset.view === view)));
+  $("view-title").textContent = VIEWS[view][0];
+  $("view-hint").textContent = VIEWS[view][1];
+  location.hash = view;
+  if (scrollTo) setTimeout(() => $(scrollTo)?.scrollIntoView({ behavior: "smooth" }), 60);
 }
+document.querySelectorAll(".nav-item").forEach(b =>
+  b.onclick = () => go(b.dataset.view));
 
+/* ── login ── */
 function showLogin(msg) {
-  document.getElementById("login").hidden = false;
-  document.getElementById("app").hidden = true;
-  if (msg) document.getElementById("login-err").textContent = msg;
+  $("login").hidden = false; $("app").hidden = true;
+  if (msg) $("login-err").textContent = msg;
 }
-
-function showApp(w) {
-  ROLE = w.role;
-  document.getElementById("login").hidden = true;
-  document.getElementById("app").hidden = false;
-  const b = document.getElementById("banner");
-  b.textContent = `管理员 ${w.admin} · ${w.role === "rw" ? "可写" : "只读"}`;
-  b.classList.toggle("ro", w.role !== "rw");
-  if (w.role !== "rw") {
-    document.querySelectorAll("#app button").forEach(x => x.disabled = true);
-  }
-  return refresh();
-}
-
-document.getElementById("login-form").onsubmit = async e => {
+$("login-form").onsubmit = async e => {
   e.preventDefault();
-  document.getElementById("login-err").textContent = "";
+  $("login-err").textContent = "";
   try {
     const w = await post("/admin/login", {
-      username: document.getElementById("u").value,
-      password: document.getElementById("p").value,
+      username: $("u").value, password: $("p").value,
     });
-    document.getElementById("p").value = "";
-    await showApp(w);
-  } catch (err) {
-    // One message for every kind of failure, matching the server: telling
-    // an attacker which half was wrong hands out a username oracle.
+    $("p").value = "";
+    await enter(w);
+  } catch {
+    // One message for every failure, matching the server: telling an
+    // attacker which half was wrong hands out a username oracle.
     showLogin("用户名或密码不正确");
   }
 };
-
-api("/admin/whoami").then(showApp).catch(() => showLogin(""));
-
-function loadTenants() {
-  return api("/admin/tenants").then(d => {
-    VERSIONS = Object.fromEntries(d.tenants.map(t => [t.tenant, t.version]));
-    for (const id of ["ov-tenant", "b-tenant", "k-tenant", "p-tenant"]) {
-      document.getElementById(id).innerHTML =
-        d.tenants.map(t => `<option>${esc(t.tenant)}</option>`).join("");
-    }
-    table(document.getElementById("tenants"), [
-      ["tenant", t => esc(t.tenant)],
-      ["", t => t.enabled ? '<span class="active">on</span>'
-                          : '<span class="off">switched off</span>'],
-      ["budget", t => usd(t.effective.budget_nanousd_per_day) +
-        (t.effective.budget_nanousd_per_day !== t.declared.budget_nanousd_per_day
-          ? ` <span class="narrowed">(声明 ${usd(t.declared.budget_nanousd_per_day)})</span>`
-          : "")],
-      ["fallback", t => t.effective.allow_fallback ? "yes" :
-        (t.declared.allow_fallback ? '<span class="narrowed">no（被收紧）</span>' : "no")],
-      ["cross_tenant_read",
-        t => pair(t.declared.cross_tenant_read, t.effective.cross_tenant_read)],
-      ["substitutable_to", t => Object.keys(t.declared.models).map(m =>
-        `${esc(m.split("/").pop())}: ${pair(t.declared.models[m], t.effective.models[m])}`
-      ).join("<br>") || '<span class="dim">—</span>'],
-      ["keys", t => t.keys],
-    ], d.tenants);
-
-    table(document.getElementById("overrides"), [
-      ["#", o => o.id],
-      ["tenant", o => esc(o.tenant)],
-      ["移除了", o => esc(o.field) + (o.model ? ` / ${esc(o.model)}` : "") +
-        ` = ${esc(o.removed_value)}`],
-      ["理由", o => esc(o.reason)],
-      ["谁", o => esc(o.applied_by)],
-      ["", o => ROLE === "rw"
-        ? `<button onclick="lift(${o.id})">撤销</button>`
-        : '<span class="dim">只读</span>'],
-    ], d.tenants.flatMap(t => t.overrides_in_force));
-
-    // Orphans are listed, never auto-cleaned. Cleaning silently would make
-    // "the pull request landed but had no effect" and "somebody's tightening
-    // vanished" both happen with nothing on screen.
-    if (d.orphans.length) {
-      note("孤儿覆盖 " + d.orphans.length + " 条：" +
-        d.orphans.map(o => `#${o.id} ${o.tenant}/${o.field}（${o.why}）`).join("；") +
-        " —— 它们已经不起作用，但仍显示为生效。不自动清理。");
-    }
-  }).catch(err => { fail("tenants", err); fail("overrides", err); });
-}
-
-function loadKeys() {
-  return api("/admin/keys").then(d => table(document.getElementById("keys"), [
-    ["prefix", k => esc(k.key_prefix) + "…"],
-    ["tenant", k => esc(k.tenant)],
-    ["label", k => esc(k.label)],
-    ["issued by", k => esc(k.issued_by)],
-    ["state", k => `<span class="${esc(k.state)}">${esc(k.state)}</span>`],
-    ["", k => k.state === "active" && ROLE === "rw"
-      ? `<button onclick="revoke('${esc(k.key_id)}')">吊销</button>` : ""],
-  ], d.keys)).catch(err => fail("keys", err));
-}
-
-function loadActions() {
-  return api("/admin/actions").then(d => table(document.getElementById("actions"), [
-    ["when", a => esc(String(a.ts).replace("T", " ").slice(0, 19))],
-    ["who", a => esc(a.actor)],
-    ["what", a => esc(a.action)],
-    ["target", a => esc(a.target)],
-  ], d.actions)).catch(err => fail("actions", err));
-}
-
-function refresh() {
-  return Promise.all([loadTenants(), loadKeys(), loadActions()]);
-}
-
 window.logout = async () => {
   await post("/admin/logout").catch(() => null);
   location.reload();
 };
 
-async function guard(fn) {
-  try { await fn(); note("已生效。", true); await refresh(); }
-  catch (err) { note(err.message); }
+async function enter(w) {
+  ROLE = w.role;
+  $("login").hidden = true; $("app").hidden = false;
+  $("who-name").textContent = w.admin;
+  $("who-role").textContent = w.role === "rw" ? "可写" : "只读";
+  $("who-role").className = "role" + (w.role === "rw" ? "" : " ro");
+  if (ROLE !== "rw") document.querySelectorAll("[data-w]").forEach(b => b.disabled = true);
+  go(location.hash.slice(1) in VIEWS ? location.hash.slice(1) : "overview");
+  await refresh();
 }
 
-window.lift = id => guard(() => post(`/admin/overrides/${id}/lift`));
-window.revoke = id => guard(() => post(`/admin/keys/${id}/revoke`));
+/* ── load ── */
+async function refresh() {
+  const [t, k, a, ac] = await Promise.all([
+    api("/admin/tenants").catch(e => ({ error: e })),
+    api("/admin/keys").catch(e => ({ error: e })),
+    api("/admin/actions").catch(e => ({ error: e })),
+    api("/admin/accounts").catch(e => ({ error: e })),
+  ]);
+  if (t.error) return toast("租户面板：" + t.error.message, true);
+  DATA = {
+    tenants: t.tenants, orphans: t.orphans,
+    keys: k.keys || [], actions: a.actions || [], accounts: ac.accounts || [],
+  };
+  $("n-tenants").textContent = DATA.tenants.length;
+  $("n-keys").textContent = DATA.keys.filter(x => x.state === "active").length;
+  $("n-admins").textContent = DATA.accounts.filter(x => x.state === "active").length;
+  renderAll();
+}
 
-document.getElementById("ov-go").onclick = () => guard(() => post("/admin/overrides", {
-  tenant: document.getElementById("ov-tenant").value,
-  field: document.getElementById("ov-field").value,
-  model: document.getElementById("ov-model").value || null,
-  removed_value: document.getElementById("ov-value").value,
-  reason: document.getElementById("ov-reason").value,
-  version: VERSIONS[document.getElementById("ov-tenant").value],
-}));
-
-document.getElementById("b-go").onclick = () => guard(() => post("/admin/budget", {
-  tenant: document.getElementById("b-tenant").value,
-  budget_nanousd_per_day: parseInt(document.getElementById("b-value").value, 10),
-  reason: document.getElementById("b-reason").value,
-  approved_by: document.getElementById("b-approver").value || null,
-  version: VERSIONS[document.getElementById("b-tenant").value],
-}));
-
-document.getElementById("k-go").onclick = () => guard(async () => {
-  const r = await post("/admin/keys", {
-    tenant: document.getElementById("k-tenant").value,
-    label: document.getElementById("k-label").value,
+function fillSelects() {
+  const opts = DATA.tenants.map(t => `<option>${esc(t.tenant)}</option>`).join("");
+  ["b-tenant", "k-tenant", "ov-tenant", "p-tenant"].forEach(id => {
+    const el = $(id), keep = el.value;
+    el.innerHTML = opts;
+    if (keep) el.value = keep;
   });
-  // Shown once, here, and nowhere else. The table below will only ever have
-  // the prefix, because the database only ever had the digest.
-  document.getElementById("k-new").innerHTML =
-    `<pre>${esc(r.api_key)}\n\n${esc(r.warning)}</pre>`;
-});
+  onOvField();
+}
 
-document.getElementById("p-go").onclick = async () => {
-  try {
-    const r = await post("/admin/proposals", {
-      tenant: document.getElementById("p-tenant").value,
-      field: document.getElementById("p-field").value,
-      model: document.getElementById("p-model").value || null,
-      value: document.getElementById("p-value").value,
-    });
-    document.getElementById("proposal").innerHTML =
-      (r.no_op ? '<p class="dim">这个值已经在声明里了，diff 为空。</p>' : "") +
-      `<pre>${esc(r.diff)}</pre>` +
-      `<p class="${esc(r.gates.verdict)}">G1/G4：${esc(r.gates.verdict)} — ` +
-      `${esc(r.gates.detail)}</p>` +
-      (r.gates.g1.length ? `<pre>${esc(r.gates.g1.join("\n"))}</pre>` : "") +
-      (r.gates.g4.length ? `<pre>${esc(r.gates.g4.join("\n"))}</pre>` : "") +
-      `<p class="dim">${esc(r.how_to_apply)}</p>`;
-  } catch (err) { note(err.message); }
+/* A value the file declares but the gateway is not honouring was taken away
+   by somebody. Struck through, in amber, on every screen it appears. */
+function pair(dec, eff) {
+  const e = new Set(eff || []);
+  const parts = (dec || []).map(v => e.has(v)
+    ? esc(v) : `<span class="struck">${esc(v)}</span>`);
+  return parts.join(" ") || '<span class="faint">—</span>';
+}
+
+function renderAll() {
+  fillSelects();
+  const changed = DATA.tenants.filter(t =>
+    JSON.stringify(t.declared) !== JSON.stringify(t.effective)).length;
+  const off = DATA.tenants.filter(t => !t.enabled).length;
+  const spend = DATA.tenants.reduce((s, t) => s + t.effective.budget_nanousd_per_day, 0);
+
+  $("stats").innerHTML = [
+    ["租户", DATA.tenants.length, off ? `${off} 个已停用` : "全部在线", off ? "amber" : ""],
+    ["被收紧", changed, changed ? "生效值不等于声明值" : "与声明值一致", changed ? "amber" : "ok"],
+    ["活跃凭据", DATA.keys.filter(k => k.state === "active").length,
+      `${DATA.keys.length} 把历史`, ""],
+    ["日预算合计", usd(spend), "nano-USD", ""],
+  ].map(([l, v, s, c]) =>
+    `<div class="stat"><div class="l">${l}</div><div class="v ${c}">${v}</div>
+     <div class="s">${s}</div></div>`).join("");
+
+  $("orphan-note").innerHTML = DATA.orphans.length ? `<div class="note bad">
+    <b>孤儿覆盖 ${DATA.orphans.length} 条。</b>策略文件已经变了，这些收紧不再起作用，
+    但仍显示为「生效中」。<b>不自动清理</b>——静默清理会让「PR 合入了但没生效」和
+    「谁的收紧被悄悄删了」两件事都在屏幕上无声发生。<br>
+    ${DATA.orphans.map(o => `#${o.id} ${esc(o.tenant)} / ${esc(o.field)} — ${esc(o.why)}`).join("<br>")}
+    </div>` : "";
+
+  $("recent").innerHTML = DATA.actions.slice(0, 6).map(a => `<tr>
+    <td class="faint">${esc(String(a.ts).slice(0, 19).replace("T", " "))}</td>
+    <td>${esc(a.actor)}</td><td class="dim">${esc(a.action)}</td>
+    <td>${esc(a.target || "")}</td></tr>`).join("")
+    || '<tr><td class="empty">还没有任何控制面操作</td></tr>';
+
+  $("t-rows").innerHTML = DATA.tenants.map(t => {
+    const bChanged = t.effective.budget_nanousd_per_day !== t.declared.budget_nanousd_per_day;
+    const fChanged = t.effective.allow_fallback !== t.declared.allow_fallback;
+    return `<tr>
+      <td><b>${esc(t.tenant)}</b><div class="faint">${esc(t.gate_command)}</div></td>
+      <td><span class="tag ${t.integration === "native" ? "info" : ""}">${esc(t.integration)}</span></td>
+      <td>${t.enabled ? '<span class="tag on">在线</span>'
+                      : '<span class="tag amber">已停用</span>'}</td>
+      <td class="num ${bChanged ? "narrowed" : ""}">${usd(t.effective.budget_nanousd_per_day)}
+        ${bChanged ? `<div class="faint">声明 ${usd(t.declared.budget_nanousd_per_day)}</div>` : ""}</td>
+      <td>${t.effective.allow_fallback ? "开"
+            : `<span class="${fChanged ? "narrowed" : "faint"}">关${fChanged ? "（被收紧）" : ""}</span>`}</td>
+      <td>${t.keys}</td>
+      <td><div class="row-actions">
+        ${t.enabled
+          ? `<button class="tiny danger" data-w onclick="disableTenant('${esc(t.tenant)}')">停用</button>`
+          : `<button class="tiny" data-w onclick="enableTenant('${esc(t.tenant)}')">恢复</button>`}
+      </div></td></tr>
+      <tr><td colspan="7" style="padding-top:0;border-bottom:1px solid var(--line)">
+        <span class="faint">cross_tenant_read</span> ${pair(t.declared.cross_tenant_read, t.effective.cross_tenant_read)}
+        &nbsp;&nbsp;<span class="faint">models</span>
+        ${Object.keys(t.declared.models).map(m =>
+          `${esc(m.split("/").pop())}[${pair(t.declared.models[m], t.effective.models[m])}]`
+        ).join(" ") || '<span class="faint">—</span>'}
+      </td></tr>`;
+  }).join("");
+
+  $("k-rows").innerHTML = DATA.keys.map(k => `<tr>
+    <td><code>${esc(k.key_prefix)}…</code></td><td>${esc(k.tenant)}</td>
+    <td>${esc(k.label)}</td><td class="dim">${esc(k.issued_by)}</td>
+    <td>${k.state === "active" ? '<span class="tag on">有效</span>'
+                               : '<span class="tag off">已吊销</span>'}</td>
+    <td><div class="row-actions">${k.state === "active"
+      ? `<button class="tiny danger" data-w onclick="revokeKey('${esc(k.key_id)}')">吊销</button>` : ""}
+    </div></td></tr>`).join("") || '<tr><td colspan="6" class="empty">还没有签发过凭据</td></tr>';
+
+  const ovs = DATA.tenants.flatMap(t => t.overrides_in_force);
+  $("ov-rows").innerHTML = ovs.map(o => `<tr>
+    <td class="faint">${o.id}</td><td>${esc(o.tenant)}</td>
+    <td><span class="narrowed">${esc(o.field)}${o.model ? " / " + esc(o.model.split("/").pop()) : ""}
+      = ${esc(o.removed_value)}</span></td>
+    <td class="dim">${esc(o.reason)}</td><td class="dim">${esc(o.applied_by)}</td>
+    <td><div class="row-actions">
+      <button class="tiny" data-w onclick="lift(${o.id})">撤销</button></div></td></tr>`).join("")
+    || '<tr><td colspan="6" class="empty">没有生效中的收紧——生效值与声明值一致</td></tr>';
+
+  $("a-rows").innerHTML = DATA.actions.map(a => `<tr>
+    <td class="faint">${esc(String(a.ts).slice(0, 19).replace("T", " "))}</td>
+    <td><b>${esc(a.actor)}</b></td><td class="dim">${esc(a.action)}</td>
+    <td>${esc(a.target || "")}</td>
+    <td class="faint">${a.before && a.after ? diffSummary(a.before, a.after) : ""}</td>
+    </tr>`).join("") || '<tr><td colspan="5" class="empty">还没有任何控制面操作</td></tr>';
+
+  $("ac-rows").innerHTML = DATA.accounts.map(a => `<tr>
+    <td><b>${esc(a.username)}</b></td>
+    <td><span class="tag ${a.role === "rw" ? "amber" : "info"}">${esc(a.role)}</span></td>
+    <td>${a.state === "active" ? '<span class="tag on">正常</span>'
+        : a.state === "locked" ? '<span class="tag bad">已冻结</span>'
+        : '<span class="tag off">已停用</span>'}</td>
+    <td class="dim">${a.last_login_at ? esc(String(a.last_login_at).slice(0, 19).replace("T", " ")) : "从未"}</td>
+    <td class="${a.failed_attempts ? "err" : "faint"}">${a.failed_attempts}</td>
+    <td><div class="row-actions">${a.state !== "disabled"
+      ? `<button class="tiny danger" data-w onclick="disableAccount('${esc(a.username)}')">停用</button>` : ""}
+    </div></td></tr>`).join("");
+
+  if (ROLE !== "rw") document.querySelectorAll("[data-w]").forEach(b => b.disabled = true);
+}
+
+function diffSummary(b, a) {
+  const out = [];
+  for (const k of Object.keys(a)) {
+    if (JSON.stringify(b[k]) !== JSON.stringify(a[k])) out.push(k);
+  }
+  return out.join(", ");
+}
+
+/* ── actions ── */
+async function act(fn, ok) {
+  try { await fn(); toast(ok); await refresh(); }
+  catch (e) { toast(e.message, true); }
+}
+const tv = id => $(id).value;
+
+window.disableTenant = t => {
+  const reason = prompt(`停用 ${t} 的理由（必填，会进审计）`);
+  if (!reason) return;
+  act(() => post("/admin/overrides", {
+    tenant: t, field: "enabled", removed_value: "true", reason,
+  }), `${t} 已停用——它的凭据立即失效，历史账目保留`);
+};
+window.enableTenant = t => {
+  const o = DATA.tenants.find(x => x.tenant === t)
+    ?.overrides_in_force.find(x => x.field === "enabled");
+  if (!o) return toast("找不到对应的停用记录", true);
+  act(() => post(`/admin/overrides/${o.id}/lift`), `${t} 已恢复`);
+};
+window.lift = id => act(() => post(`/admin/overrides/${id}/lift`), "已撤销，生效值回到声明值");
+window.revokeKey = id => act(() => post(`/admin/keys/${id}/revoke`),
+  "已吊销——没有复活操作，需要的话重新签发一把");
+
+window.setBudget = () => act(async () => {
+  await post("/admin/budget", {
+    tenant: tv("b-tenant"),
+    budget_nanousd_per_day: parseInt(tv("b-value"), 10),
+    reason: tv("b-reason"),
+    approved_by: tv("b-approver") || null,
+    version: DATA.tenants.find(t => t.tenant === tv("b-tenant"))?.version,
+  });
+  $("b-value").value = $("b-reason").value = $("b-approver").value = "";
+}, "预算已写入");
+
+window.issueKey = () => act(async () => {
+  const r = await post("/admin/keys", { tenant: tv("k-tenant"), label: tv("k-label") });
+  // Shown once, here. The table below will only ever have the prefix,
+  // because the database only ever had the digest.
+  $("new-key").innerHTML = `<div class="secret">
+    <code id="secret-val">${esc(r.api_key)}</code>
+    <button class="tiny" onclick="copySecret()">复制</button></div>
+    <p class="note" style="margin-bottom:14px">${esc(r.warning)}</p>`;
+  $("k-label").value = "";
+}, "已签发——立即可用，无需重启");
+
+window.copySecret = async () => {
+  await navigator.clipboard.writeText($("secret-val").textContent);
+  toast("已复制到剪贴板");
+};
+window.copyDiff = async () => {
+  await navigator.clipboard.writeText(LAST_DIFF);
+  toast("diff 已复制");
 };
 
+function onOvField() {
+  const f = $("ov-field").value, t = DATA.tenants.find(x => x.tenant === tv("ov-tenant"));
+  const isSub = f === "substitutable_to", isList = isSub || f === "cross_tenant_read";
+  $("ov-model-f").hidden = !isSub;
+  $("ov-value-f").hidden = !isList;
+  if (!t) return;
+  if (isSub) {
+    $("ov-model").innerHTML = Object.keys(t.effective.models)
+      .map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    const fams = t.effective.models[$("ov-model").value] || [];
+    $("ov-value").innerHTML = fams.map(v => `<option>${esc(v)}</option>`).join("")
+      || '<option value="">（无可移除项）</option>';
+  } else if (f === "cross_tenant_read") {
+    $("ov-value").innerHTML = t.effective.cross_tenant_read
+      .map(v => `<option>${esc(v)}</option>`).join("")
+      || '<option value="">（无可移除项）</option>';
+  }
+}
+$("ov-tenant").addEventListener("change", onOvField);
+$("ov-model").addEventListener("change", onOvField);
+
+window.addOverride = () => act(async () => {
+  const f = $("ov-field").value;
+  await post("/admin/overrides", {
+    tenant: tv("ov-tenant"), field: f,
+    model: f === "substitutable_to" ? tv("ov-model") : null,
+    removed_value: (f === "enabled" || f === "allow_fallback") ? "true" : tv("ov-value"),
+    reason: tv("ov-reason"),
+    version: DATA.tenants.find(t => t.tenant === tv("ov-tenant"))?.version,
+  });
+  $("ov-reason").value = "";
+}, "已收紧——即时生效");
+
+function showProposal(r) {
+  LAST_DIFF = r.diff;
+  $("p-out").hidden = false;
+  $("p-diff").innerHTML = esc(r.diff).split("\n").map(l =>
+    l.startsWith("+") ? `<span class="add">${l}</span>` :
+    l.startsWith("-") ? `<span class="del">${l}</span>` :
+    l.startsWith("@") ? `<span class="hd">${l}</span>` : l).join("\n");
+  const v = r.gates.verdict;
+  $("p-verdict").innerHTML = `<span class="tag ${
+    v === "clean" ? "on" : v === "would_violate" ? "bad" : "amber"}">${esc(v)}</span>`;
+  $("p-detail").textContent = r.gates.detail;
+  $("p-apply").textContent = r.how_to_apply;
+  $("p-out").scrollIntoView({ behavior: "smooth" });
+}
+
+window.propose = async () => {
+  try {
+    showProposal(await post("/admin/proposals", {
+      tenant: tv("p-tenant"), field: $("p-field").value,
+      model: tv("p-model") || null, value: tv("p-value"),
+    }));
+  } catch (e) { toast(e.message, true); }
+};
+window.proposeTenant = async () => {
+  try {
+    showProposal(await post("/admin/proposals/tenant", {
+      tenant: tv("nt-name"), integration: $("nt-integration").value,
+      gate_command: tv("nt-gate") || "make eval",
+      budget_nanousd_per_day: parseInt(tv("nt-budget") || "0", 10),
+    }));
+  } catch (e) { toast(e.message, true); }
+};
+
+window.createAccount = () => act(async () => {
+  await post("/admin/accounts", {
+    username: tv("ac-user"), password: tv("ac-pass"), role: $("ac-role").value,
+  });
+  $("ac-user").value = $("ac-pass").value = "";
+}, "管理员已创建");
+window.disableAccount = u => {
+  if (!confirm(`停用 ${u}？它的在线会话会同时结束。`)) return;
+  act(() => post(`/admin/accounts/${u}/disable`), `${u} 已停用`);
+};
+
+/* ── boot ── */
+api("/admin/whoami").then(enter).catch(() => showLogin(""));
 </script>
+</html>

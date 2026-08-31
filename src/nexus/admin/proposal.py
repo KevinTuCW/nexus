@@ -56,6 +56,36 @@ def widen(
     raise ValueError(f"'{field}' is not a loosenable field; expected {LOOSENABLE}")
 
 
+def new_tenant(
+    tenant: str,
+    integration: str,
+    gate_command: str,
+    api_key_env: str,
+    budget_nanousd_per_day: int,
+    allow_fallback: bool = False,
+) -> TenantPolicy:
+    """The policy a proposed new tenant would have.
+
+    Creating a tenant is a loosening: it conjures a new principal that can
+    spend money, and it cannot be verified from here at all -- a zero-touch
+    tenant is only integrated once `scripts/verify_tenant.py` says its repo
+    reaches the gateway unmodified. So it produces a diff, never a row.
+
+    Everything defaults closed: no models (so nothing is substitutable), no
+    cross-tenant grants, fallback off. A tenant that arrives with permissions
+    already granted is a tenant nobody reviewed.
+    """
+    return TenantPolicy(
+        tenant=tenant,
+        integration=integration,
+        repo_path=None,
+        gate_command=gate_command,
+        api_key_env=api_key_env,
+        allow_fallback=allow_fallback,
+        budget_nanousd_per_day=budget_nanousd_per_day,
+    )
+
+
 def to_yaml(policy: TenantPolicy) -> str:
     """Render a policy the way `policies/<tenant>.yaml` is written."""
     body: dict = {

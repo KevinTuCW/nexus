@@ -523,6 +523,115 @@ def propose(session: str = Cookie(default="", alias="nexus_admin_session"), body
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/admin/proposals/tenant")
+def propose_tenant(
+    session: str = Cookie(default="", alias=COOKIE_NAME), body: dict = Body(...)
+) -> dict:
+    """A diff that would create a tenant. Writes nothing, by design.
+
+    Creating a tenant is a loosening and it is also unverifiable from here:
+    a zero-touch tenant counts as integrated only once
+    `scripts/verify_tenant.py` confirms its repo reaches the gateway
+    unmodified, which is not something an HTTP handler can establish.
+    """
+    _admin(session)
+    name = (body.get("tenant") or "").strip()
+    state = get_state()
+    if not name:
+        raise HTTPException(status_code=400, detail="tenant name is required")
+    if name in state.declared:
+        raise HTTPException(status_code=409, detail=f"tenant '{name}' already exists")
+
+    try:
+        after = proposal.new_tenant(
+            tenant=name,
+            integration=body.get("integration", "zero_touch"),
+            gate_command=(body.get("gate_command") or "make eval").strip(),
+            api_key_env=(
+                body.get("api_key_env") or f"NEXUS_KEY_{name.upper()}"
+            ).strip(),
+            budget_nanousd_per_day=int(body.get("budget_nanousd_per_day") or 0),
+            allow_fallback=bool(body.get("allow_fallback")),
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "tenant": name,
+        "diff": proposal.to_yaml(after),
+        "path": f"policies/{name}.yaml",
+        "gates": {
+            "verdict": "not_applicable",
+            "detail": (
+                "新租户在账本里还没有任何调用，四道门无从判定。接入是否成立由 "
+                "scripts/verify_tenant.py 判断——它要确认租户仓一行未改就能打通。"
+            ),
+            "g1": [], "g4": [],
+        },
+        "how_to_apply": (
+            f"把上面的内容存成 policies/{name}.yaml，配好 "
+            f"{body.get('api_key_env') or f'NEXUS_KEY_{name.upper()}'}，"
+            "走 review 合入后重启网关，再跑 scripts/verify_tenant.py。"
+        ),
+    }
+
+
+# --- administrators ------------------------------------------------------
+
+
+@router.get("/admin/accounts")
+def list_accounts(session: str = Cookie(default="", alias=COOKIE_NAME)) -> dict:
+    """Never returns a hash or a salt."""
+    _admin(session)
+    return {"accounts": _accounts().list_accounts()}
+
+
+@router.post("/admin/accounts")
+def create_account(
+    session: str = Cookie(default="", alias=COOKIE_NAME), body: dict = Body(...)
+) -> dict:
+    """Create another administrator.
+
+    The *first* administrator still cannot be created this way -- there is no
+    session to authenticate, and a control plane that mints its own first
+    administrator over HTTP has a window in which anyone can be that
+    administrator. Subsequent ones have no such window: somebody already
+    authenticated is vouching.
+    """
+    admin = _writer(session)
+    cp, _ = _stores()
+    try:
+        _accounts().create(
+            str(body.get("username", "")).strip(),
+            str(body.get("password", "")),
+            body.get("role", "rw"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=f"无法创建：{exc}") from exc
+    username = str(body.get("username", "")).strip()
+    cp.record(admin.name, "account.create", username, None, {"role": body.get("role")})
+    return {"username": username, "role": body.get("role", "rw")}
+
+
+@router.post("/admin/accounts/{username}/disable")
+def disable_account(
+    username: str, session: str = Cookie(default="", alias=COOKIE_NAME)
+) -> dict:
+    """Disable an account and end its live sessions in the same breath."""
+    admin = _writer(session)
+    if username == admin.name:
+        raise HTTPException(
+            status_code=400,
+            detail="不能停用自己——那会把最后一个管理员锁在门外，且无法自救",
+        )
+    cp, _ = _stores()
+    _accounts().disable(username)
+    cp.record(admin.name, "account.disable", username, None, None)
+    return {"username": username, "state": "disabled"}
+
+
 # --- audit ---------------------------------------------------------------
 
 
