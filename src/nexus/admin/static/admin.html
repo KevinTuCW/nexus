@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nexus · control plane</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#c9d1d9;
+          --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --none:#6e7681; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.6 ui-monospace,monospace;
+         margin:0; padding:24px; }
+  h2 { font-size:13px; letter-spacing:1px; color:var(--dim); margin:24px 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
+          padding:12px 18px 20px; }
+  .pending { color:var(--dim); }
+</style>
+<div class="card">
+  <h2>CONTROL PLANE</h2>
+  <!-- Phase 4a mounts identity, not function. The panels that read and write
+       policy arrive in 4b and 4c, on top of an identity that was checked
+       first rather than added afterwards. -->
+  <p class="pending">身份层已就位，面板在 Phase 4b / 4c。</p>
+</div>
