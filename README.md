@@ -2,7 +2,7 @@
 
 # 🛡️ nexus
 
-**万尔玛集团 AI 中台** —— 零侵入接入四个存量业务系统（租户仓改动 0 行）· 路由不塌多样性(硬门) · 归因 0 误差(硬门) · 租户门禁不回退(硬门) · 降级不静默(硬门) · 每道门都配一个能跑的失败演示 · 整数记账账本（最小单位 1e-9 美元）· 零构建 FinOps 控制台
+**万尔玛集团 AI 中台** —— 零侵入接入四个存量业务系统（租户仓改动 0 行）· 路由不塌多样性(硬门) · 归因 0 误差(硬门) · 租户门禁不回退(硬门) · 降级不静默(硬门) · 每道门都配一个能跑的失败演示 · 整数记账账本（最小单位 1e-9 美元）· 零构建 FinOps 控制台 · 控制面收紧热生效、放松只出提案
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#-许可证)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
@@ -11,7 +11,7 @@
 [![Postgres](https://img.shields.io/badge/Postgres-ledger%20BIGINT-336791.svg?logo=postgresql&logoColor=white)](db/schema.sql)
 [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-fbbf24.svg)](https://langfuse.com/)
 [![CI](https://img.shields.io/badge/CI-offline%20tests-2088FF.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-353%20passed-brightgreen.svg)](#-评测)
+[![tests](https://img.shields.io/badge/tests-361%20passed-brightgreen.svg)](#-评测)
 [![tenant edits](https://img.shields.io/badge/tenant%20repo%20edits-0%20lines-brightgreen.svg)](#-零侵入契约)
 [![gates](https://img.shields.io/badge/gates-G1%E2%80%93G4%20exit%202-brightgreen.svg)](#-评测)
 
@@ -63,6 +63,7 @@
 - 🧪 **跑批器把三种结局分开** —— `failed`（跑了说不行）/ `unverifiable`（什么都没跑，**这不是通过**）/ `metrics_unavailable`（跑了但输出格式变了，那是排版不是质量）。合并任意两种都会产出一个会撒谎的跑批器。
 - 🔌 **离线优先** —— 默认上游是一个确定性的假上游，真实供应商靠 `UPSTREAM=litellm` 显式打开：**一次 `git clone` 加 `make test` 不该给任何人产生账单**。而控制台顶部因此常驻一条不可折叠的横幅声明当前跑的是不是真上游——对着假上游的控制台和对着真供应商的长得一模一样。
 - 🖥️ **零构建控制台** —— 单文件 HTML，五块面板（成本归因 / 路由与被否决的替换 / 门禁矩阵 / 降级记录 / 配额），全部**既鉴权又授权**，按调用方的 `cross_tenant_read` 范围裁剪并回一个 `scope` 字段。门禁面板与配额面板都是**三态**：把 `unverifiable` 画成绿灯、或把 `over_budget` 画成 `active` 的控制台，比没有控制台更危险。
+- 🎛️ **控制面按方向分流，不按字段** —— `/admin` 里**收紧即时生效**（发/吊销 key、停用租户、移除可替换族、调低预算），**放松没有写路径**：它只生成 `policies/<tenant>.yaml` 的 diff 加 G1/G4 的结论，由人走 review 落盘。这不是一条可能被忘记的规则——`policy_override` **没有 `new_value` 列**，放宽在 schema 层面没有语法。README 上面那次对 G1 的攻击是一次 git 提交；一个设计不当的控制面会把它变成三次点击。**预算是唯一的例外**：上调是放松，但它背后没有门、且是每周都发生的运维动作，所以留在热路径上并按幅度要第二个人签字，而**调低永远免签，包括调到 0 止血**——一个要等人点头才让你停止花钱的控制面，会在最该用它的那一刻被绕过。
 
 ## 🏗️ 架构
 
@@ -92,6 +93,9 @@ helpmate    shopscout   wealthwise   aura(云侧)   wuwork
 │           / baseline 比对 [G3]                        │
 │                                                       │
 │ console   五块面板（按 authz 授权范围裁剪）+ 横幅      │
+│ admin     具名管理员（与租户 key 不同命名空间）        │
+│           收紧 → 写库 + 原地重新合成（不清缓存）       │
+│           放松 → 只出 diff + 跑门，不写库              │
 └──────────────────────────┬───────────────────────────┘
                            ▼
             z.ai(GLM) · SiliconFlow(Qwen3/DeepSeek) · DashScope(Qwen3)
@@ -105,6 +109,7 @@ eval  ──▶  G1 · G2 · G3 · G4  ──▶  任一违规 exit 2
 - **`policy`**（`policy/`）—— 提议与否决分家。`fallback` 遵守同一条约束：**失败不豁免多样性**，pinned 模型无处可降，链为空而不是「降到一个凑合的」；但租户**自己点名的那个模型永远在链里**，因为用租户点名的那个模型作答不叫替换。`quota` 里预算 0 表示**关停**而不是无限，且它**真的会拦**——一个画着预算却从不执行的面板，比没有预算字段更坏。
 - **`ledger`**（`ledger/`）—— 归一化 → 计量 → 落账 → 对账。只有**叶子调用**计费，父 span 不重复计。`reconcile()` 不是碰巧好用的 helper，**它就是 G2 的定义**，包含「`aborted` 行按下界判」那条规则；重写一遍不会更独立，只会多一份可以自由漂移的拷贝。
 - **`assurance`**（`assurance/`）—— 唯一会去碰租户仓的东西，也因此是全仓最保守的一块：跑批前仓已脏就**拒绝开跑**（分不清是谁改的，事后还原会毁掉别人的工作），跑完还原跟踪文件、**列出但不删**新增的未跟踪文件，还原不回 CLEAN 就返回 `unverifiable`。
+- **`admin`**（`admin/`）—— 控制面。策略在**被读取之前**就已合成为生效值（`registry/effective.py`），所以既有 11 个策略读取点一行不用改，**忘记某条路径在结构上不可能**。热生效一律原地替换 `State.policies[tenant]`，**从不 `cache_clear()`**——清缓存会连带丢掉 `RoutingLog`，而那正是控制台展示 G1 否决的唯一来源。
 - **`console`**（`console/`）—— 它的存在理由是让 G1 拦下来的东西**被人看见**。路由日志为「被否决的替换」和「正常路由」维护**两条独立队列**，因为否决更早、更稀有，共用一条队列必然被冲掉。
 
 ## 🤝 零侵入契约
@@ -159,7 +164,7 @@ make install                            # = pip install -e '.[dev]'，离线跑�
 # .venv/bin/pip install -e '.[dev,llm,pg]'
 
 # 2. 跑测试（离线、hermetic、零 key）
-make test                               # 353 passed, 14 skipped
+make test                               # 361 passed, 35 skipped
 
 # 3. 跑四道硬门
 make eval                               # 打印证据条数 + 逐门 passed/FAILED/no evidence
@@ -202,7 +207,7 @@ docker compose up --build               # db + nexus，DATABASE_URL 已接线，
 # 或本机 Postgres（与其余五个项目同结构同端口）：
 createdb nexus && psql nexus -f db/schema.sql
 export DATABASE_URL=postgresql://nexus:nexus@localhost:5432/nexus
-make test-live                          # 364 passed, 3 skipped
+make test-live                          # 393 passed, 3 skipped
 ```
 
 镜像在构建时跑自己的整套测试。让测试阶段成为**门**而不是旁支的是最后那一行 `COPY --from=test /build/.tests-passed`——Docker 只构建被依赖的阶段，没有这个 COPY，测试可以整个被跳过而镜像照样打出 tag。**那个标记文件只在 pytest 退出 0 时存在。**
@@ -281,7 +286,7 @@ G4: passed
 
 G2 那个 `no evidence` 不是回退，是**把一直存在的空洞标出来**。它需要「上游说自己收了多少」，而 nexus 不接任何供应商的账单 API——网关进程一退出，这半边证据就没了。过去它照样打印 `passed`，因为空账本对空账单永远自洽。
 
-单测：**353 passed, 14 skipped**（离线）／**364 passed, 3 skipped**（接 Postgres）。52 个测试模块、`src/` 4213 行。
+单测：**361 passed, 35 skipped**（离线）／**393 passed, 3 skipped**（接 Postgres，实测非推算）。54 个测试模块、`src/` 5071 行。
 
 ### 一条原则
 
@@ -581,7 +586,7 @@ nexus/
 ├── db/schema.sql               # ledger_entry(BIGINT) + cross_tenant_read_audit
 ├── docs/                       # integration-helpmate / -shopscout / wuwork
 ├── scripts/verify_tenant.py    # 零侵入校验：跑前跑后各验一次租户仓
-├── tests/                      # 52 个文件，353 passed / 14 skipped
+├── tests/                      # 54 个文件，361 passed / 35 skipped
 ├── .github/workflows/ci.yml    # 只跑离线，刻意不跑 live
 ├── Dockerfile                  # 两阶段；COPY --from=test 让测试成为门
 └── docker-compose.yml
@@ -638,9 +643,11 @@ models:
 - ✅ **对 G1 的一次真实攻击** —— 放开三个 pin：权重族 3→1、账单降 91%、全部 200、零报错
 - ✅ **一次横向架构复核** —— 四条控制被写出来、被测试、画进了架构图，却没接到任何真实路径上：门在判空气 / 控制台鉴权当授权 / 预算是装饰 / 降级绕过多样性分组。全部修掉并各配证伪，见[一次架构复核](#-一次架构复核四件本该有人问的事)
 - ✅ **P4a 生效模型与凭据** —— 策略在被读取之前合成为**生效值**（覆盖只能收窄：`Override` 没有 `new_value`，放松在结构上无从表达），既有 11 个读取点一行未改；`eval.py` 一并改走同一入口，否则四道门按声明值判、网关按生效值跑，一次收紧就对门隐形；凭据索引改 `sha256 → 租户`，进程内存不再持有任何明文 key；`tenant_key` 支持签发/吊销/**无中断轮换**；`/admin` 具名管理员（不是一把共享 key），缺库或缺管理员时**不挂载**而不是挂上去全部拒绝
-- ⬜ **P4b 策略与额度控制面** —— `enabled` 执行点收口（**必须是第一件事**，见下一条）、`policy_override`、`tenant_budget` 与阈值分级、热生效原地替换、回滚、乐观并发、`admin_action` 审计
-- ⬜ **P4c 控制面界面** —— 四块面板、提案 diff、提案跑门举证、孤儿覆盖检测
-- ⬜ **`enabled` 还没接上执行点** —— P4a 引入了这个字段，但目前没有任何东西能把它设成 False，也没有任何路径会因它拒绝请求。**它现在是个惰性字段**，而这个仓刚在上一次架构复核里数落过四条一模一样的东西：写出来、测过、画进架构图，却没接到任何真实路径上。P4b 的第一个 Task 修它
+- ✅ **P4b 策略与额度控制面** —— `enabled` 接上收口执行点，五个数据面入口（对话补全 / 两条 passthrough / `/v1/usage` / 控制台）统一走 `resolve_caller`，**一条规则抄五遍就是五条规则**；`policy_override`（无 `new_value` 列，放宽没有语法）+ `tenant_budget`（分表，因为额度必须能升）+ 按幅度的第二人复核；热生效**原地替换、从不 `cache_clear()`**；每个热动作都有逆动作；乐观并发**跨两张表**取版本
+- ✅ **P4c 控制面界面** —— 四块面板（声明值与生效值并排，被收紧的项标出来）、提案 diff + G1/G4 结论同屏、孤儿覆盖**列出但不自动清理**、审计追到人
+- ⬜ **租户 key 仍是全权凭据** —— 一把 key 同时能发推理、读用量、开控制台。**这意味着 `/admin` 发出去的每一把 key 都比它应该有的权限大。** 要修的是数据面鉴权（按 scope 签发），不在控制面范围内
+- ⬜ **控制面凭据走 `?key=`** —— `/admin` 页面壳接受查询串，因为浏览器地址栏设不了 header，这也是控制台读它的原因。查询串会进日志和 `Referer`，**这是零构建页面的代价**，写在这里而不是等人发现
+- ⬜ **收紧多样性也可能降低多样性** —— 移除 `substitutable_to` 项会让路由无处可去，可能把流量全压到单一模型上。G1 判「替换是否被允许」，不判「剩下的选择是否还够」。界面上警告，**不设门**——设一道判不准的门比不设更坏
 - ⬜ **审计落库** —— 表已建、代码未写。**在此之前审计只活到下次重启**，见[诚实的留白](#审计只活到下次重启)
 - ⬜ **对账接供应商账单 API** —— 现在拿供应商自己的响应对账，等于账本跟自己对账。真正独立的信源是账单 API。**在那之前 G2 对着真账本报的是 `no evidence`**，嵌入行的对账证据也一并缺着
 - ⬜ **G3 live 臂进 CI** —— 需要凭据与时间预算；直接塞进现有 CI 会得到一个「缺 secret 就红」的流水线，而那种流水线一周内就会被加 `continue-on-error`
