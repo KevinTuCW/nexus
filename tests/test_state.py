@@ -93,10 +93,37 @@ def test_unknown_upstream_name_is_refused(monkeypatch, policies_dir):
 
 
 def test_state_policies_come_from_the_effective_layer():
-    # Asserts the binding. A State that calls load_policies directly will
-    # read declared values once Phase 4b lands, and a gateway running on
-    # declared values is a gateway on which overrides do not exist.
+    # Asserts the binding. A State that composed nothing would read declared
+    # values, and a gateway running on declared values is one on which
+    # overrides do not exist.
+    #
+    # `load_policies` is also imported now -- deliberately, for `declared`,
+    # which the console needs in order to show what was tightened. So the
+    # claim is no longer "load_policies is absent" but "policies is the
+    # composed one and declared is kept beside it".
+    import inspect
+
     import nexus.state as st
 
     assert hasattr(st, "load_effective_policies")
-    assert not hasattr(st, "load_policies")
+    source = inspect.getsource(st.get_state)
+    assert "load_effective_policies(settings.policies_dir" in source
+    assert "policies = load_policies(" not in source
+
+
+def test_state_keeps_the_declared_policies_beside_the_effective_ones(
+    monkeypatch, policies_dir
+):
+    # With no overrides the two are equal, and that equality is Phase 4a's
+    # completion criterion holding at the assembly point rather than only in
+    # the composition unit test.
+    from nexus.state import get_state
+
+    monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
+    monkeypatch.setenv("DATABASE_URL", "")
+    get_state.cache_clear()
+    try:
+        state = get_state()
+        assert state.declared and state.policies == state.declared
+    finally:
+        get_state.cache_clear()

@@ -76,3 +76,61 @@ CREATE TABLE IF NOT EXISTS tenant_key (
 );
 
 CREATE INDEX IF NOT EXISTS tenant_key_tenant ON tenant_key (tenant);
+
+-- Capability overrides. Records what was *removed*; there is deliberately no
+-- `new_value` column. Loosening therefore has no syntax here and can only be
+-- done by editing policies/<tenant>.yaml and going through review. A comment
+-- asking people not to widen would not survive the next person who needs to.
+CREATE TABLE IF NOT EXISTS policy_override (
+    id            BIGSERIAL PRIMARY KEY,
+    tenant        TEXT NOT NULL,
+    field         TEXT NOT NULL CHECK (field IN
+                    ('substitutable_to', 'cross_tenant_read',
+                     'allow_fallback', 'enabled')),
+    -- Only for substitutable_to: which model's table this hangs under.
+    model         TEXT,
+    removed_value TEXT NOT NULL,
+    -- NOT NULL on purpose. A tightening with no stated reason is one nobody
+    -- dares lift six months later, so it stops being reversible in practice.
+    reason        TEXT NOT NULL,
+    applied_by    TEXT NOT NULL,
+    applied_at    TIMESTAMPTZ NOT NULL,
+    lifted_by     TEXT,
+    -- NULL means in force. Lifting is the inverse action every hot change is
+    -- required to have.
+    lifted_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS policy_override_tenant ON policy_override (tenant);
+
+-- Budgets. A separate table from policy_override because budget must be able
+-- to go *up*, and policy_override is built so that nothing can. Append-only:
+-- the current budget is the tenant's newest row.
+CREATE TABLE IF NOT EXISTS tenant_budget (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant      TEXT NOT NULL,
+    budget_nanousd_per_day BIGINT NOT NULL CHECK (budget_nanousd_per_day >= 0),
+    reason      TEXT NOT NULL,
+    changed_by  TEXT NOT NULL,
+    -- Set when a raise crossed the threshold that needs a second pair of
+    -- eyes. NULL on any change that did not.
+    approved_by TEXT,
+    ts          TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS tenant_budget_tenant_ts ON tenant_budget (tenant, ts);
+
+-- Who changed what. Separate from cross_tenant_read_audit: that one records
+-- who *looked*, this one records who *acted*. Neither holds a credential --
+-- see src/nexus/admin/store.py.
+CREATE TABLE IF NOT EXISTS admin_action (
+    id      BIGSERIAL PRIMARY KEY,
+    actor   TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    target  TEXT,
+    before  JSONB,
+    after   JSONB,
+    ts      TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS admin_action_ts ON admin_action (ts DESC);

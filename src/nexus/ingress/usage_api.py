@@ -17,10 +17,10 @@ noise, which is the same as not logging them.
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from nexus.ingress.auth import AuthError, authenticate
 from nexus.ingress.authz import CrossTenantDenied, authorize_explicit
 from nexus.ledger.book import rollup
 from nexus.state import get_state
+from nexus.ingress.caller import resolve_caller
 
 router = APIRouter()
 
@@ -30,11 +30,8 @@ def usage(
     authorization: str = Header(default=""),
     tenants: str | None = Query(default=None),
 ) -> dict:
+    caller = resolve_caller(authorization)
     state = get_state()
-    try:
-        caller = authenticate(authorization, state.key_index)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     requested = tuple(t.strip() for t in tenants.split(",")) if tenants else (caller,)
     try:

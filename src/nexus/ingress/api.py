@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from nexus.ingress.auth import AuthError, authenticate
 from nexus.ingress.budget import enforce_budget
 from nexus.ledger.book import Entry
 from nexus.ledger.session import meter
@@ -30,17 +29,15 @@ from nexus.providers import canonical_model
 from nexus.registry.families import family_of
 from nexus.state import get_state
 from nexus.upstream import PRICES, UpstreamUnavailable
+from nexus.ingress.caller import resolve_caller
 
 router = APIRouter()
 
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str = Header(default="")):
+    tenant = resolve_caller(authorization)
     state = get_state()
-    try:
-        tenant = authenticate(authorization, state.key_index)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     body = await request.json()
     requested_name = body.get("model", "")

@@ -11,7 +11,8 @@ Putting state here inverts the dependency — `app.py` and every router import
 structurally, so the cycle cannot come back quietly.
 """
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from nexus.audit import InMemoryAudit
@@ -20,8 +21,8 @@ from nexus.ingress.admin_auth import Admin, load_admin_index
 from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
 from nexus.policy.diversity import GroupLedger
-from nexus.registry.effective import load_effective_policies
-from nexus.registry.tenants import TenantPolicy
+from nexus.registry.effective import Override, compose, load_effective_policies
+from nexus.registry.tenants import TenantPolicy, load_policies
 from nexus.routing_log import RoutingLog
 from nexus.upstream import FakeUpstream, Upstream
 
@@ -39,6 +40,29 @@ class State:
     groups: GroupLedger
     audit: InMemoryAudit
     routing: RoutingLog
+    #: The YAML as written, before any override. Kept alongside the effective
+    #: policies for two reasons: recomposing after a control-plane change
+    #: needs the declared value to narrow from, and the console has to show
+    #: both. Displaying only the effective value cannot answer "was this
+    #: always so, or did somebody tighten it"; displaying only the declared
+    #: value is a screen that lies.
+    declared: dict[str, TenantPolicy] = field(default_factory=dict)
+
+    def recompose(
+        self,
+        tenant: str,
+        overrides: "Sequence[Override]",
+        budget: int | None,
+    ) -> None:
+        """Swap one tenant's effective policy in place.
+
+        In place, and never `get_state.cache_clear()`. Clearing rebuilds the
+        whole `State`, which discards `RoutingLog` -- the record of what G1
+        vetoed, and the only reason the console's routing panel has anything
+        to show. A control plane that erased the audit surface every time
+        somebody used it would be worse than none.
+        """
+        self.policies[tenant] = compose(self.declared[tenant], overrides, budget)
 
 
 @lru_cache(maxsize=1)
@@ -48,11 +72,25 @@ def get_state() -> State:
     Tests call `get_state.cache_clear()` to start from an empty book.
     """
     settings = get_settings()
+
+    # Overrides and budgets come from the control plane when there is one.
+    # No database means neither exists -- not an error, the same fallback the
+    # ledger makes, so a fresh clone still runs offline with nothing but YAML.
+    overrides: list[Override] = []
+    budgets: dict[str, int] = {}
+    if settings.database_url:
+        from nexus.admin.store import ControlPlaneStore
+
+        cp = ControlPlaneStore(settings.database_url)
+        overrides = cp.active_overrides()
+        budgets = cp.current_budgets()
+
     # Effective, not declared. Control-plane overrides are merged here, so
     # every layer below -- routing, the diversity guard, quota, the console
     # -- reads the effective policy without each having to remember to look
     # an override table up.
-    policies = load_effective_policies(settings.policies_dir)
+    policies = load_effective_policies(settings.policies_dir, overrides, budgets)
+    declared = load_policies(settings.policies_dir)
 
     upstream: Upstream
     if settings.upstream == "fake":
@@ -109,4 +147,5 @@ def get_state() -> State:
         groups=GroupLedger(),
         audit=InMemoryAudit(),
         routing=RoutingLog(),
+        declared=declared,
     )

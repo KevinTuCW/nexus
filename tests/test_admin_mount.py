@@ -17,8 +17,17 @@ def _client(monkeypatch, policies_dir, *, admins: str, database_url: str):
     monkeypatch.setenv("POLICIES_DIR", str(policies_dir))
     monkeypatch.setenv("NEXUS_ADMIN_KEYS", admins)
     monkeypatch.setenv("DATABASE_URL", database_url)
+    # A DSN that merely exists is enough to decide mounting; nothing here
+    # touches a table, so the stores are stubbed rather than a database being
+    # required to test an access-control rule.
     monkeypatch.setattr(
         "nexus.admin.store.TenantKeyStore.active_digests", lambda self: {}
+    )
+    monkeypatch.setattr(
+        "nexus.admin.store.ControlPlaneStore.active_overrides", lambda self: []
+    )
+    monkeypatch.setattr(
+        "nexus.admin.store.ControlPlaneStore.current_budgets", lambda self: {}
     )
     return TestClient(create_app())
 

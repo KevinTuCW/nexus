@@ -27,14 +27,14 @@ something else.
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from fastapi.responses import FileResponse
 
-from nexus.ingress.auth import AuthError, authenticate
 from nexus.ingress.authz import visible_tenants
 from nexus.ledger.book import rollup
 from nexus.policy.quota import day_start
 from nexus.state import get_state
+from nexus.ingress.caller import resolve_caller
 
 BASELINES_DIR = Path(__file__).resolve().parents[3] / "baselines"
 
@@ -43,11 +43,8 @@ router = APIRouter()
 
 def _scope(authorization: str) -> frozenset[str]:
     """Authenticate the caller and return the tenants it may see."""
+    caller = resolve_caller(authorization)
     state = get_state()
-    try:
-        caller = authenticate(authorization, state.key_index)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
     return visible_tenants(caller, state.policies, state.audit)
 
 

@@ -24,13 +24,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException
 
 from nexus.config import get_settings
-from nexus.ingress.auth import AuthError, authenticate
 from nexus.ingress.budget import enforce_budget
 from nexus.ledger.book import Entry
 from nexus.ledger.usage import Usage, cost_nanousd
 from nexus.registry.families import family_of
 from nexus.upstream import EMBEDDING_PRICES
 from nexus.state import get_state
+from nexus.ingress.caller import resolve_caller
 
 #: Endpoints forwarded verbatim. Grow this list deliberately, one measured
 #: tenant need at a time.
@@ -49,11 +49,8 @@ def _post(url: str, json: dict, headers: dict, timeout: int):
 @router.post("/rerank")
 @router.post("/v1/rerank")
 async def rerank(payload: dict, authorization: str = Header(default="")) -> dict:
+    resolve_caller(authorization)
     state = get_state()
-    try:
-        authenticate(authorization, state.key_index)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     settings = get_settings()
     provider_key = os.environ.get(settings.rerank_api_key_env, "").strip()
@@ -106,11 +103,8 @@ async def embeddings(payload: dict, authorization: str = Header(default="")) -> 
     ingestion invisible in the cost breakdown -- for the tenant whose cost
     attribution is the reason this platform exists.
     """
+    tenant = resolve_caller(authorization)
     state = get_state()
-    try:
-        tenant = authenticate(authorization, state.key_index)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     # Billed, so budgeted. helpmate's corpus ingestion runs through here, and
     # a budget that covers chat but not ingestion covers the smaller half.

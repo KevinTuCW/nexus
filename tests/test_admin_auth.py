@@ -24,8 +24,17 @@ def admin_app(monkeypatch, policies_dir, tmp_path):
     monkeypatch.setenv("NEXUS_KEY_WUWORK", "sk-wuwork")
     monkeypatch.setenv("NEXUS_ADMIN_KEYS", "kevin:nx-admin-rw,ops-li:ro:nx-admin-ro")
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused/mounting-only")
+    # A DSN that merely exists is enough to decide mounting; nothing here
+    # touches a table, so the stores are stubbed rather than a database being
+    # required to test an access-control rule.
     monkeypatch.setattr(
         "nexus.admin.store.TenantKeyStore.active_digests", lambda self: {}
+    )
+    monkeypatch.setattr(
+        "nexus.admin.store.ControlPlaneStore.active_overrides", lambda self: []
+    )
+    monkeypatch.setattr(
+        "nexus.admin.store.ControlPlaneStore.current_budgets", lambda self: {}
     )
     get_state.cache_clear()
     yield TestClient(create_app())
