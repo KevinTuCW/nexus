@@ -34,7 +34,8 @@ from nexus.config import get_settings
 from nexus.ledger.book import Entry, UpstreamCharge, reconcile
 from nexus.ledger.usage import Usage
 from nexus.registry.families import family_of
-from nexus.registry.tenants import TenantPolicy, load_policies, substitution_allowed
+from nexus.registry.effective import load_effective_policies
+from nexus.registry.tenants import TenantPolicy, substitution_allowed
 
 
 def check_g4_fallback_is_never_silent(rows: list[Entry]) -> list[str]:
@@ -373,7 +374,11 @@ def main() -> int:
         rows = load_ledger_rows(args.ledger_json)
         charges = load_charges(args.charges_json)
 
-    policies = load_policies(Path(__file__).resolve().parents[2] / "policies")
+    # Effective, through the same entry point the gateway uses. Judging by
+    # the declared value would make every control-plane tightening invisible
+    # to the four gates -- a gate judges permitted substitutions, and the
+    # definition of "permitted" has moved.
+    policies = load_effective_policies(Path(__file__).resolve().parents[2] / "policies")
 
     print(
         f"evidence: {len(rows)} ledger row(s), {len(charges)} upstream charge(s)"

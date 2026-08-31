@@ -90,3 +90,13 @@ def test_unknown_upstream_name_is_refused(monkeypatch, policies_dir):
             get_state()
     finally:
         get_state.cache_clear()
+
+
+def test_state_policies_come_from_the_effective_layer():
+    # Asserts the binding. A State that calls load_policies directly will
+    # read declared values once Phase 4b lands, and a gateway running on
+    # declared values is a gateway on which overrides do not exist.
+    import nexus.state as st
+
+    assert hasattr(st, "load_effective_policies")
+    assert not hasattr(st, "load_policies")

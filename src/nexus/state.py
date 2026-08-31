@@ -19,7 +19,8 @@ from nexus.config import get_settings
 from nexus.ingress.auth import build_key_index
 from nexus.ledger.book import InMemoryLedger, Ledger
 from nexus.policy.diversity import GroupLedger
-from nexus.registry.tenants import TenantPolicy, load_policies
+from nexus.registry.effective import load_effective_policies
+from nexus.registry.tenants import TenantPolicy
 from nexus.routing_log import RoutingLog
 from nexus.upstream import FakeUpstream, Upstream
 
@@ -43,7 +44,11 @@ def get_state() -> State:
     Tests call `get_state.cache_clear()` to start from an empty book.
     """
     settings = get_settings()
-    policies = load_policies(settings.policies_dir)
+    # Effective, not declared. Control-plane overrides are merged here, so
+    # every layer below -- routing, the diversity guard, quota, the console
+    # -- reads the effective policy without each having to remember to look
+    # an override table up.
+    policies = load_effective_policies(settings.policies_dir)
 
     upstream: Upstream
     if settings.upstream == "fake":

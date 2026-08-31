@@ -7,6 +7,7 @@ from pathlib import Path
 from nexus.eval import check_g1_diversity_is_never_collapsed
 from nexus.ledger.book import Entry
 from nexus.ledger.usage import Usage
+from nexus.registry.effective import Override, compose
 from nexus.registry.tenants import load_policies
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,3 +84,47 @@ def test_fail_demo_g1_exits_two():
     )
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "G1" in proc.stdout + proc.stderr
+
+
+def _qwen_substitution_row() -> Entry:
+    # wuwork asks for Qwen3-8B and routing serves another model of the same
+    # family. The declared policy permits this (substitutable_to: [qwen3]),
+    # so the row is compliant as it stands.
+    return Entry(
+        entry_id="e1", call_id="c1", tenant="wuwork", workload="default",
+        trace_root=None, span_id="s1", parent_span_id=None,
+        model="dashscope/qwen3-235b-a22b", family="qwen3",
+        usage=Usage(prompt_tokens=1, completion_tokens=1),
+        cost_nanousd=1, status="ok", ts=datetime.now(timezone.utc),
+        requested_model="siliconflow/Qwen/Qwen3-8B",
+        routed_model="dashscope/qwen3-235b-a22b",
+    )
+
+
+def test_g1_permits_the_substitution_the_declared_policy_allows(policies_dir):
+    assert check_g1_diversity_is_never_collapsed(
+        [_qwen_substitution_row()], load_policies(policies_dir)) == []
+
+
+def test_g1_judges_by_the_effective_policy_not_the_declared_one(policies_dir):
+    # Same row, same gate. The only difference is that the policy was
+    # tightened, and the gate has to follow -- otherwise a tightening made in
+    # the control plane is invisible to all four gates.
+    declared = load_policies(policies_dir)
+    effective = dict(declared)
+    effective["wuwork"] = compose(declared["wuwork"], [Override(
+        tenant="wuwork", field="substitutable_to",
+        removed_value="qwen3", model="siliconflow/Qwen/Qwen3-8B")])
+
+    violations = check_g1_diversity_is_never_collapsed(
+        [_qwen_substitution_row()], effective)
+
+    assert len(violations) == 1
+    assert "wuwork" in violations[0]
+
+
+def test_eval_loads_policies_through_the_effective_layer():
+    import nexus.eval as ev
+
+    assert hasattr(ev, "load_effective_policies")
+    assert not hasattr(ev, "load_policies")
