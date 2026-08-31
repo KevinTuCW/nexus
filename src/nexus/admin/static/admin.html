@@ -3,18 +3,297 @@
 <title>nexus · control plane</title>
 <style>
   :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#c9d1d9;
-          --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --none:#6e7681; }
+          --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+          --none:#6e7681; }
   body { background:var(--bg); color:var(--fg); font:14px/1.6 ui-monospace,monospace;
          margin:0; padding:24px; }
   h2 { font-size:13px; letter-spacing:1px; color:var(--dim); margin:24px 0 8px; }
+  table { border-collapse:collapse; width:100%; }
+  td,th { border-bottom:1px solid var(--line); padding:6px 10px; text-align:left;
+          vertical-align:top; }
+  th { color:var(--dim); font-weight:400; }
+  .banner { padding:10px 14px; border:1px solid var(--line); border-radius:4px;
+            margin-bottom:18px; }
+  .banner.ro { border-color:var(--warn); color:var(--warn); }
+  .alert { border:1px solid var(--bad); border-radius:4px; color:var(--bad);
+           padding:10px 14px; margin-bottom:18px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:6px;
-          padding:12px 18px 20px; }
-  .pending { color:var(--dim); }
+          padding:12px 18px 20px; margin-bottom:18px; }
+  .active,.clean{color:var(--ok)} .revoked,.lifted,.off{color:var(--none)}
+  .in_force,.would_violate{color:var(--bad)} .no_evidence{color:var(--warn)}
+  .err { color:var(--bad); }
+  .dim { color:var(--dim); }
+  .narrowed { color:var(--warn); }
+  button { background:#21262d; color:var(--fg); border:1px solid var(--line);
+           border-radius:4px; padding:3px 10px; font:inherit; cursor:pointer; }
+  button:disabled { color:var(--none); cursor:not-allowed; }
+  input,select { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+                 border-radius:4px; padding:3px 8px; font:inherit; }
+  pre { background:#0d1117; border:1px solid var(--line); border-radius:4px;
+        padding:10px; overflow:auto; white-space:pre-wrap; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
 </style>
+
+<div id="banner" class="banner">loading…</div>
+<div id="alert" class="alert" hidden></div>
+
+<!-- Declared and effective side by side. Either alone misleads: only the
+     effective value cannot answer "was it always so, or did somebody tighten
+     it", and only the declared value is a screen that lies about what the
+     gateway is actually doing. -->
+<div class="card"><h2>TENANTS · 声明值 vs 生效值</h2><table id="tenants"></table></div>
+
 <div class="card">
-  <h2>CONTROL PLANE</h2>
-  <!-- Phase 4a mounts identity, not function. The panels that read and write
-       policy arrive in 4b and 4c, on top of an identity that was checked
-       first rather than added afterwards. -->
-  <p class="pending">身份层已就位，面板在 Phase 4b / 4c。</p>
+  <h2>OVERRIDES · 收紧即时生效</h2>
+  <div class="row">
+    <select id="ov-tenant"></select>
+    <select id="ov-field">
+      <option value="enabled">enabled（停用租户）</option>
+      <option value="allow_fallback">allow_fallback（关降级）</option>
+      <option value="cross_tenant_read">cross_tenant_read（收回跨租户读）</option>
+      <option value="substitutable_to">substitutable_to（移除可替换族）</option>
+    </select>
+    <input id="ov-model" placeholder="model（仅 substitutable_to）" size="26">
+    <input id="ov-value" placeholder="removed_value" size="14" value="true">
+    <input id="ov-reason" placeholder="理由（必填）" size="24">
+    <button id="ov-go">收紧</button>
+  </div>
+  <table id="overrides"></table>
 </div>
+
+<div class="card">
+  <h2>BUDGET <span class="dim">nano-USD · 调低永不需要复核</span></h2>
+  <div class="row">
+    <select id="b-tenant"></select>
+    <input id="b-value" placeholder="nano-USD/day" size="16">
+    <input id="b-reason" placeholder="理由（必填）" size="24">
+    <input id="b-approver" placeholder="复核人（仅大幅上调需要）" size="22">
+    <button id="b-go">设置</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>KEYS <span class="dim">明文只显示一次</span></h2>
+  <div class="row">
+    <select id="k-tenant"></select>
+    <input id="k-label" placeholder="label（必填）" size="20">
+    <button id="k-go">签发</button>
+  </div>
+  <div id="k-new"></div>
+  <table id="keys"></table>
+</div>
+
+<!-- Loosening has no write path. This produces a diff and the gates' verdict;
+     a human lands it through review. -->
+<div class="card">
+  <h2>PROPOSALS · 放松只出 diff，不写库</h2>
+  <div class="row">
+    <select id="p-tenant"></select>
+    <select id="p-field">
+      <option value="substitutable_to">substitutable_to</option>
+      <option value="cross_tenant_read">cross_tenant_read</option>
+      <option value="allow_fallback">allow_fallback</option>
+    </select>
+    <input id="p-model" placeholder="model" size="26">
+    <input id="p-value" placeholder="要加回的值" size="14">
+    <button id="p-go">生成提案</button>
+  </div>
+  <div id="proposal"></div>
+</div>
+
+<div class="card"><h2>AUDIT · 谁改了什么</h2><table id="actions"></table></div>
+
+<script>
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const H = { "Authorization": "Bearer " + KEY, "Content-Type": "application/json" };
+const usd = n => "$" + (n / 1e9).toFixed(6);
+const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+let ROLE = "ro", VERSIONS = {};
+
+// Same rule the console learned the hard way: a refused panel and an idle one
+// must not render the same empty table. Every call either returns a body or
+// raises, and every caller says so on screen.
+async function api(path, opts = {}) {
+  let r;
+  try { r = await fetch(path, { headers: H, ...opts }); }
+  catch (e) { throw new Error(`${path} — 网络不可达`); }
+  if (!r.ok) {
+    const detail = await r.json().then(b => b.detail).catch(() => r.statusText);
+    throw new Error(`HTTP ${r.status}: ${detail}`);
+  }
+  return r.json();
+}
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
+
+function note(msg, ok) {
+  const a = document.getElementById("alert");
+  a.textContent = msg; a.hidden = false;
+  a.style.borderColor = ok ? "var(--ok)" : "var(--bad)";
+  a.style.color = ok ? "var(--ok)" : "var(--bad)";
+}
+function fail(id, err) {
+  document.getElementById(id).innerHTML =
+    `<tr><td class="err">未能加载 · ${esc(err.message)}</td></tr>`;
+}
+function table(el, cols, rows) {
+  el.innerHTML = "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+}
+
+// A value the declared policy has and the effective one does not was taken
+// away by somebody. Showing what is gone, next to what remains, is the whole
+// point of this panel.
+function pair(dec, eff) {
+  const e = new Set(eff || []);
+  const gone = (dec || []).filter(x => !e.has(x));
+  const kept = (dec || []).filter(x => e.has(x));
+  return (kept.map(esc).join(", ") || '<span class="dim">—</span>') +
+    (gone.length ? ` <span class="narrowed">−${gone.map(esc).join(", ")}</span>` : "");
+}
+
+api("/admin/whoami").then(w => {
+  ROLE = w.role;
+  const b = document.getElementById("banner");
+  b.textContent = `管理员 ${w.admin} · ${w.role === "rw" ? "可写" : "只读"}`;
+  if (w.role !== "rw") {
+    b.classList.add("ro");
+    document.querySelectorAll("button").forEach(x => x.disabled = true);
+  }
+}).catch(err => {
+  const b = document.getElementById("banner");
+  b.textContent = "未能确认身份 · " + err.message;
+  b.classList.add("ro");
+  note(KEY ? "凭据无效或不是管理员。" :
+    "未提供 key。用 /admin?key=<管理员 key> 打开（key 来自 NEXUS_ADMIN_KEYS）。");
+});
+
+function loadTenants() {
+  return api("/admin/tenants").then(d => {
+    VERSIONS = Object.fromEntries(d.tenants.map(t => [t.tenant, t.version]));
+    for (const id of ["ov-tenant", "b-tenant", "k-tenant", "p-tenant"]) {
+      document.getElementById(id).innerHTML =
+        d.tenants.map(t => `<option>${esc(t.tenant)}</option>`).join("");
+    }
+    table(document.getElementById("tenants"), [
+      ["tenant", t => esc(t.tenant)],
+      ["", t => t.enabled ? '<span class="active">on</span>'
+                          : '<span class="off">switched off</span>'],
+      ["budget", t => usd(t.effective.budget_nanousd_per_day) +
+        (t.effective.budget_nanousd_per_day !== t.declared.budget_nanousd_per_day
+          ? ` <span class="narrowed">(声明 ${usd(t.declared.budget_nanousd_per_day)})</span>`
+          : "")],
+      ["fallback", t => t.effective.allow_fallback ? "yes" :
+        (t.declared.allow_fallback ? '<span class="narrowed">no（被收紧）</span>' : "no")],
+      ["cross_tenant_read",
+        t => pair(t.declared.cross_tenant_read, t.effective.cross_tenant_read)],
+      ["substitutable_to", t => Object.keys(t.declared.models).map(m =>
+        `${esc(m.split("/").pop())}: ${pair(t.declared.models[m], t.effective.models[m])}`
+      ).join("<br>") || '<span class="dim">—</span>'],
+      ["keys", t => t.keys],
+    ], d.tenants);
+
+    table(document.getElementById("overrides"), [
+      ["#", o => o.id],
+      ["tenant", o => esc(o.tenant)],
+      ["移除了", o => esc(o.field) + (o.model ? ` / ${esc(o.model)}` : "") +
+        ` = ${esc(o.removed_value)}`],
+      ["理由", o => esc(o.reason)],
+      ["谁", o => esc(o.applied_by)],
+      ["", o => ROLE === "rw"
+        ? `<button onclick="lift(${o.id})">撤销</button>`
+        : '<span class="dim">只读</span>'],
+    ], d.tenants.flatMap(t => t.overrides_in_force));
+
+    // Orphans are listed, never auto-cleaned. Cleaning silently would make
+    // "the pull request landed but had no effect" and "somebody's tightening
+    // vanished" both happen with nothing on screen.
+    if (d.orphans.length) {
+      note("孤儿覆盖 " + d.orphans.length + " 条：" +
+        d.orphans.map(o => `#${o.id} ${o.tenant}/${o.field}（${o.why}）`).join("；") +
+        " —— 它们已经不起作用，但仍显示为生效。不自动清理。");
+    }
+  }).catch(err => { fail("tenants", err); fail("overrides", err); });
+}
+
+function loadKeys() {
+  return api("/admin/keys").then(d => table(document.getElementById("keys"), [
+    ["prefix", k => esc(k.key_prefix) + "…"],
+    ["tenant", k => esc(k.tenant)],
+    ["label", k => esc(k.label)],
+    ["issued by", k => esc(k.issued_by)],
+    ["state", k => `<span class="${esc(k.state)}">${esc(k.state)}</span>`],
+    ["", k => k.state === "active" && ROLE === "rw"
+      ? `<button onclick="revoke('${esc(k.key_id)}')">吊销</button>` : ""],
+  ], d.keys)).catch(err => fail("keys", err));
+}
+
+function loadActions() {
+  return api("/admin/actions").then(d => table(document.getElementById("actions"), [
+    ["when", a => esc(String(a.ts).replace("T", " ").slice(0, 19))],
+    ["who", a => esc(a.actor)],
+    ["what", a => esc(a.action)],
+    ["target", a => esc(a.target)],
+  ], d.actions)).catch(err => fail("actions", err));
+}
+
+function refresh() {
+  return Promise.all([loadTenants(), loadKeys(), loadActions()]);
+}
+
+async function guard(fn) {
+  try { await fn(); note("已生效。", true); await refresh(); }
+  catch (err) { note(err.message); }
+}
+
+window.lift = id => guard(() => post(`/admin/overrides/${id}/lift`));
+window.revoke = id => guard(() => post(`/admin/keys/${id}/revoke`));
+
+document.getElementById("ov-go").onclick = () => guard(() => post("/admin/overrides", {
+  tenant: document.getElementById("ov-tenant").value,
+  field: document.getElementById("ov-field").value,
+  model: document.getElementById("ov-model").value || null,
+  removed_value: document.getElementById("ov-value").value,
+  reason: document.getElementById("ov-reason").value,
+  version: VERSIONS[document.getElementById("ov-tenant").value],
+}));
+
+document.getElementById("b-go").onclick = () => guard(() => post("/admin/budget", {
+  tenant: document.getElementById("b-tenant").value,
+  budget_nanousd_per_day: parseInt(document.getElementById("b-value").value, 10),
+  reason: document.getElementById("b-reason").value,
+  approved_by: document.getElementById("b-approver").value || null,
+  version: VERSIONS[document.getElementById("b-tenant").value],
+}));
+
+document.getElementById("k-go").onclick = () => guard(async () => {
+  const r = await post("/admin/keys", {
+    tenant: document.getElementById("k-tenant").value,
+    label: document.getElementById("k-label").value,
+  });
+  // Shown once, here, and nowhere else. The table below will only ever have
+  // the prefix, because the database only ever had the digest.
+  document.getElementById("k-new").innerHTML =
+    `<pre>${esc(r.api_key)}\n\n${esc(r.warning)}</pre>`;
+});
+
+document.getElementById("p-go").onclick = async () => {
+  try {
+    const r = await post("/admin/proposals", {
+      tenant: document.getElementById("p-tenant").value,
+      field: document.getElementById("p-field").value,
+      model: document.getElementById("p-model").value || null,
+      value: document.getElementById("p-value").value,
+    });
+    document.getElementById("proposal").innerHTML =
+      (r.no_op ? '<p class="dim">这个值已经在声明里了，diff 为空。</p>' : "") +
+      `<pre>${esc(r.diff)}</pre>` +
+      `<p class="${esc(r.gates.verdict)}">G1/G4：${esc(r.gates.verdict)} — ` +
+      `${esc(r.gates.detail)}</p>` +
+      (r.gates.g1.length ? `<pre>${esc(r.gates.g1.join("\n"))}</pre>` : "") +
+      (r.gates.g4.length ? `<pre>${esc(r.gates.g4.join("\n"))}</pre>` : "") +
+      `<p class="dim">${esc(r.how_to_apply)}</p>`;
+  } catch (err) { note(err.message); }
+};
+
+refresh();
+</script>

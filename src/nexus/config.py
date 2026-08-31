@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     # why cents cannot be used. Exposed as a setting only so the value is
     # discoverable, not so it can be changed.
     default_currency_unit: str = "nanousd"
+    # Budget raises above *either* of these need a second administrator.
+    # Lowering never does -- including lowering to zero, which is how you stop
+    # the bleeding. A control plane that wants a second pair of eyes before it
+    # will let you stop spending gets bypassed at exactly the moment it
+    # matters most, and a bypassed control is worse than an absent one because
+    # it is still on the diagram.
+    budget_raise_factor_without_approval: float = 2.0
+    #: 10 USD/day, written as integer nano-USD like every other amount here.
+    budget_ceiling_without_approval: int = 10_000_000_000
 
 
 def get_settings() -> Settings:
